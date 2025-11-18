@@ -1,0 +1,34 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+
+# Virtual environments
+venv/
+.env/
+
+
+# Byte-compiled / optimized / DLL files
+*.pyc
+*.pyo
+*.pyd
+
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+
+# VSCode settings
+.vscode/
+
+
+# Custom ignored folders
+Data/
+GBFS-SND/

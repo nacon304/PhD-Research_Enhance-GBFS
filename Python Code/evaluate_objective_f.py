@@ -34,6 +34,7 @@ def evaluate_objective_f(M, individual_adj):
         featIdx_full = np.ones(n_features, dtype=bool)
     else:
         featIdx = kshell_2(corrMatrix)
+        # print("Selected feature indices:", featIdx)
         featIdx = np.asarray(featIdx).astype(int).ravel()
 
         if GG.trData is None or GG.trLabel is None:

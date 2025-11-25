@@ -86,4 +86,5 @@ def disEva(arChive):
             ratio = nearMissNom / farHitNom
         tempkGenArchive[0, j] = np.nanmean(ratio)
 
+    # print("tempkGenArchive:", tempkGenArchive)
     return tempkGenArchive

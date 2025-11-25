@@ -27,6 +27,7 @@ def kshell_2(Gadj0):
     # loop until all nodes are removed
     while len(featSeq) > 0:
         # degree measure on current subgraph
+        # print(f"Iteration {it}, remaining nodes: {len(featSeq)}")
         D = my_degree(Gadj, featSeq)
         D = np.asarray(D, dtype=float).ravel()
 
@@ -38,6 +39,7 @@ def kshell_2(Gadj0):
         while True:
             # indices (positions) in featSeq that have minimal degree
             feat_pos = np.where(D == minD)[0]
+            # print(feat_pos)
 
             if feat_pos.size == 0:
                 # store current shell
@@ -48,6 +50,7 @@ def kshell_2(Gadj0):
                 break
             else:
                 a = [featSeq[pos] for pos in feat_pos]
+                # print(f"Nodes with degree {minD}: {a}")
 
                 # add to current bucket
                 temp.extend(a)
@@ -66,7 +69,14 @@ def kshell_2(Gadj0):
                 D = my_degree(Gadj, featSeq)
                 D = np.asarray(D, dtype=float).ravel()
 
+        if len(featSeq) == 0:
+            if len(temp) > 0:
+                bucket.append(np.array(temp, dtype=int))
+                bucketidx += 1
+
     Nbkt = len(bucket)
+    # print(f"Number of shells (buckets) = {Nbkt}")
+    # print(Gadj0)
     if Nbkt > 1:
         feat = select2(bucket)
         p = np.concatenate(

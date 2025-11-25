@@ -3,7 +3,7 @@ import numpy as np
 from copy_of_en_nsga_2_mating_strategy import copy_of_en_nsga_2_mating_strategy
 import gbfs_globals as GG
 
-def newtry_ms(inputAdj, pop=20, times=40):
+def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
     """
     Parameters
     ----------
@@ -12,6 +12,8 @@ def newtry_ms(inputAdj, pop=20, times=40):
         Population size
     times : int
         Number of generations
+    run_dir : str, optional
+        Directory to save run-specific files.
 
     Returns
     -------
@@ -26,7 +28,7 @@ def newtry_ms(inputAdj, pop=20, times=40):
 
     templateAdj = np.asarray(inputAdj, dtype=float)
 
-    chromes = copy_of_en_nsga_2_mating_strategy(pop, times, templateAdj, V_f)
+    chromes = copy_of_en_nsga_2_mating_strategy(pop, times, templateAdj, V_f, run_dir)
 
     feat_part = chromes[:, :GG.featNum]
     obj_part = chromes[:, GG.featNum:GG.featNum + 2]

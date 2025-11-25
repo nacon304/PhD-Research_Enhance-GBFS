@@ -32,5 +32,6 @@ def my_degree(Gadj, featSeq):
 
     deg_val = orideg[featSeq] * oriweg[featSeq] * lastWeg[featSeq]
     DEG = np.round(np.sqrt(deg_val))
+    # print(DEG)
 
     return DEG

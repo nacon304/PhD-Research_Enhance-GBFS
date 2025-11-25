@@ -3,6 +3,10 @@ GAPGEN = 5
 DELT = None
 OMEGA = None
 
+M = 2
+
+visual_dir = None
+
 data = None
 label = None
 

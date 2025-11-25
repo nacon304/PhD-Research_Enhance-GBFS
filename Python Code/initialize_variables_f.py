@@ -25,6 +25,7 @@ def initialize_variables_f(N, M, V, templateAdj):
     """
     K = M + V
 
+    # random binary initialization
     f = np.random.randint(0, 2, size=(N, V), dtype=int)
 
     featIdx_list = []

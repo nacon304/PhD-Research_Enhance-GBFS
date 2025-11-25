@@ -1,4 +1,6 @@
+import os
 import numpy as np
+import pandas as pd
 
 from initialize_variables_f import initialize_variables_f
 from non_domination_sort_mod import non_domination_sort_mod
@@ -10,7 +12,81 @@ from toChangeWeight import toChangeWeight
 
 import gbfs_globals as GG
 
-def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
+def save_pareto_front_csv(chromosome_f, i, V_f, run_dir):
+    """
+    Parameters
+    ----------
+    chromosome_f : np.ndarray
+        Population after non-domination sort (with rank & objectives).
+    i : int
+        Generation number.
+    V_f : int
+        Number of decision variables (feature-length).
+    run_dir : str
+        Directory to save files.
+    """
+    if run_dir is None:
+        return
+
+    csv_file_name = f"{run_dir}/gen_{i:03d}.csv"
+
+    ranks = chromosome_f[:, V_f + GG.M].astype(int)
+    mask = (ranks == 1)
+    pareto = chromosome_f[mask]
+
+    objs = pareto[:, V_f: V_f + GG.M]
+
+    df = pd.DataFrame(objs, columns=["obj1", "obj2"])
+    df.to_csv(csv_file_name, index=False)
+
+def log_population_metrics(chromosome_f, i, V_f, run_dir):
+    """
+    Parameters
+    ----------
+    chromosome_f : np.ndarray
+        Population after replace_chromosome (already has objectives, rank, etc.)
+    i : int
+        Generation index (starting from 1)
+    V_f : int
+        Length of decision-variable part (feature-side)
+    run_dir : str
+        Directory of the current run (to save CSV files)
+    """
+    objs = chromosome_f[:, V_f:V_f + GG.M]
+    obj1 = objs[:, 0]
+    obj2 = objs[:, 1]
+
+    mean_obj1 = float(np.mean(obj1))
+    mean_obj2 = float(np.mean(obj2))
+    std_obj1 = float(np.std(obj1))
+    std_obj2 = float(np.std(obj2))
+
+    rank_col_index = V_f + GG.M
+    if rank_col_index < chromosome_f.shape[1]:
+        ranks = chromosome_f[:, rank_col_index]
+        prop_rank1 = float(np.mean(ranks == 1))
+    else:
+        prop_rank1 = np.nan
+
+    metrics_path = os.path.join(run_dir, "pop_metrics.csv")
+
+    row = {
+        "gen": i,
+        "mean_obj1": mean_obj1,
+        "mean_obj2": mean_obj2,
+        "std_obj1": std_obj1,
+        "std_obj2": std_obj2,
+        "prop_rank1": prop_rank1,
+    }
+
+    if not os.path.exists(metrics_path):
+        df = pd.DataFrame([row])
+        df.to_csv(metrics_path, index=False)
+    else:
+        df = pd.DataFrame([row])
+        df.to_csv(metrics_path, mode="a", header=False, index=False)
+
+def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir=None):
     """
     Parameters
     ----------
@@ -22,6 +98,8 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
         Adjacency template.
     V_f : int
         Length of decision-variable part for feature-side (V_f).
+    run_dir : str, optional
+        Directory to save run-specific files.
 
     Returns
     -------
@@ -48,13 +126,13 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
     if gen < 5:
         raise ValueError("Minimum number of generations is 5")
 
-    M = 2
-
     # ----- Initialize population (feature-side) -----
-    chromosome_f, featIdx = initialize_variables_f(pop, M, V_f, templateAdj)
+    chromosome_f, featIdx = initialize_variables_f(pop, GG.M, V_f, templateAdj)
 
     # Sort initial population by non-domination
-    chromosome_f = non_domination_sort_mod(chromosome_f, M, V_f)
+    chromosome_f = non_domination_sort_mod(chromosome_f, GG.M, V_f)
+    save_pareto_front_csv(chromosome_f, 0, V_f, run_dir)
+    log_population_metrics(chromosome_f, 0, V_f, run_dir)
 
     # ----- Evolution process -----
     shareFlag = False              # flag for weight sharing
@@ -73,7 +151,7 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
         px = 0.9
         pm = 0.01
         offspring_chromosome_f, featIdx_f = genetic_operator_f(
-            parent_chromosome_f, M, V_f, px, pm, templateAdj
+            parent_chromosome_f, GG.M, V_f, px, pm, templateAdj
         )
 
         # --- Build intermediate population (chromosome_f) ---
@@ -88,14 +166,14 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
         # parents
         intermediate_chromosome_f[:main_pop_f, :] = chromosome_f
         intermediate_chromosome_f[
-            main_pop_f : main_pop_f + offspring_pop_f, : (M + V_f)
-        ] = offspring_chromosome_f[:, : (M + V_f)]
+            main_pop_f : main_pop_f + offspring_pop_f, : (GG.M + V_f)
+        ] = offspring_chromosome_f[:, : (GG.M + V_f)]
 
         merge_f = intermediate_chromosome_f.copy()
 
         # --- Non-dominated sorting on intermediate population ---
         intermediate_chromosome_f = non_domination_sort_mod(
-            intermediate_chromosome_f, M, V_f
+            intermediate_chromosome_f, GG.M, V_f
         )
 
         # --- Build intermediate featIdx population ---
@@ -104,39 +182,67 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
 
         temp_featidx = np.vstack([featIdx, featIdx_f])
 
-        temp_NDsort = merge_f[:, V_f : V_f + M]
+        temp_NDsort = merge_f[:, V_f : V_f + GG.M]
 
         intermediate_featIdx = np.hstack([temp_featidx, temp_NDsort])
 
         intermediate_featIdx = non_domination_sort_mod(
-            intermediate_featIdx, M, GG.featNum
+            intermediate_featIdx, GG.M, GG.featNum
         )
+
+        # print(f"---- Generation {i} ----")
+        # print(intermediate_chromosome_f)
 
         # --- Parent population in "feature space" (featIdx + objectives) ---
         parentPop = np.hstack(
-            [featIdx, chromosome_f[:, V_f : V_f + M]]
+            [featIdx, chromosome_f[:, V_f : V_f + GG.M]]
         )  # shape (pop, featNum + M)
 
-        mask_rank1 = parentPop[:, -2] == 1
+        # mask_rank1 = parentPop[:, -2] == 1
+        ranks = intermediate_chromosome_f[:, -2].astype(int)
+        best_rank  = ranks.min()
+        worst_rank = ranks.max()
+        mask_rank1   = ranks == best_rank
+        mask_rankEnd = ranks == worst_rank
 
-        t = np.abs(parentPop[mask_rank1, GG.featNum]).ravel()
-
-        if t.size > archivePop:
-            sorted_idx = np.argsort(-t)
+        t_pos = np.abs(intermediate_chromosome_f[mask_rank1, V_f]).ravel()
+        idx_pos_all = np.where(mask_rank1)[0]
+        if t_pos.size > archivePop:
+            sorted_idx = np.argsort(-t_pos)
             top_idx_small = sorted_idx[:archivePop]
-            t = t[top_idx_small]
-
-            rank1_indices = np.where(mask_rank1)[0]
-            selected_indices = rank1_indices[top_idx_small]
+            t_pos = t_pos[top_idx_small]
+            idx_pos = idx_pos_all[top_idx_small]
         else:
-            selected_indices = np.where(mask_rank1)[0]
+            idx_pos = idx_pos_all
+        
+        t_neg = np.abs(intermediate_chromosome_f[mask_rankEnd, V_f]).ravel()
+        idx_neg_all = np.where(mask_rankEnd)[0]
+        if t_neg.size > archivePop:
+            sorted_idx = np.argsort(-t_neg)
+            top_idx_small = sorted_idx[:archivePop]
+            t_neg = t_neg[top_idx_small]
+            idx_neg = idx_neg_all[top_idx_small]
+        else:
+            idx_neg = idx_neg_all
+        alpha_neg = 0.2
+        t_neg = alpha_neg * t_neg
+        
+        if best_rank == worst_rank:
+            t = t_pos
+            selected_indices = idx_pos
+        else:
+            t = np.concatenate([+t_pos, -t_neg])
+            selected_indices = np.concatenate([idx_pos, idx_neg])
 
         if kGenAccArchive.size == 0:
             kGenAccArchive = t.copy()
         else:
             kGenAccArchive = np.concatenate([kGenAccArchive, t])
 
-        tmpArc = parentPop[selected_indices, :GG.featNum]
+        # tmpArc = parentPop[selected_indices, :GG.featNum]
+        tmpArc = intermediate_chromosome_f[selected_indices, :GG.featNum]
+        # print("Selected indices:", selected_indices)
+        # print("Temporary archive:", tmpArc)
 
         if arChive.size == 0:
             arChive = tmpArc.copy()
@@ -151,11 +257,13 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
         else:
             kGenWeiArchive = np.concatenate([kGenWeiArchive, tempkGenArchive])
 
-        featIdx_new = replace_chromosome(intermediate_featIdx, M, GG.featNum, pop)
+        featIdx_new = replace_chromosome(intermediate_featIdx, GG.M, GG.featNum, pop)
 
         featIdx = (np.asarray(featIdx_new)[:, :GG.featNum] != 0)
 
-        chromosome_f = replace_chromosome(intermediate_chromosome_f, M, V_f, pop)
+        chromosome_f = replace_chromosome(intermediate_chromosome_f, GG.M, V_f, pop)
+        save_pareto_front_csv(chromosome_f, i, V_f, run_dir)
+        log_population_metrics(chromosome_f, i, V_f, run_dir)
 
         leapGen = 1
         gapGen = GG.GAPGEN
@@ -177,7 +285,7 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
             kGenAccArchive = np.array([])
             arChive = np.empty((0, GG.featNum))
 
-    chromosome_f2s = np.hstack([featIdx.astype(float), chromosome_f[:, V_f : V_f + M]])
+    chromosome_f2s = np.hstack([featIdx.astype(float), chromosome_f[:, V_f : V_f + GG.M]])
 
     chromosome_output = chromosome_f2s
     return chromosome_output

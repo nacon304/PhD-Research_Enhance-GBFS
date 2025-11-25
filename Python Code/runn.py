@@ -1,4 +1,3 @@
-import os
 from copy_of_js_ms import Copy_of_js_ms
 import gbfs_globals as GG
 
@@ -15,13 +14,6 @@ def runn(data_idx):
         Dataset name (dataName).
     """
     GG.GAPGEN = 5
-
-    base_dir = os.path.join(os.getcwd(), f"{GG.GAPGEN}_GapGens")
-    mat_dir = os.path.join(base_dir, "data")
-    pf_dir = os.path.join(base_dir, "pf")
-
-    os.makedirs(mat_dir, exist_ok=True)
-    os.makedirs(pf_dir, exist_ok=True)
 
     DELT = 0.2
     RUNS = 30
@@ -59,8 +51,8 @@ def runn(data_idx):
 
     last_two_p = p[-2:]
     P[(idx - 1) * 2 : idx * 2] = [
-        [last_two_p[0][0], last_two_p[0][1], last_two_p[0][3]],
-        [last_two_p[1][0], last_two_p[1][1], last_two_p[1][3]],
+        [last_two_p[0][0], last_two_p[0][1], last_two_p[0][4]],
+        [last_two_p[1][0], last_two_p[1][1], last_two_p[1][4]],
     ]
 
     time_stats[list_pos] = [T[-2][0], T[-1][0]]

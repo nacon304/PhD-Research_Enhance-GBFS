@@ -32,3 +32,5 @@ dist/
 # Custom ignored folders
 Data/
 GBFS-SND/
+Visualize/
+Original Result/

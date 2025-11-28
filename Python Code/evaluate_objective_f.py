@@ -5,7 +5,6 @@ from sklearn.model_selection import KFold
 import gbfs_globals as GG
 from kshell_2 import kshell_2
 
-
 def evaluate_objective_f(M, individual_adj):
     """
     Parameters
@@ -61,10 +60,10 @@ def evaluate_objective_f(M, individual_adj):
             plabel = knn.predict(X_test)
 
             acc = np.mean(plabel == y_test)
-            F1.append(-acc)  # negative accuracy (to be minimized)
+            F1.append(1 - acc)  # 1 - accuracy (to be minimized)
 
         f1 = float(np.mean(F1))
-        f2 = float(len(featIdx))  # number of selected features
+        f2 = float(len(featIdx) / GG.featNum)  # number of selected features
         f = np.array([f1, f2], dtype=float)
 
         # map to full feature mask (over full 'data' space)

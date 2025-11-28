@@ -9,82 +9,9 @@ from genetic_operator_f import genetic_operator_f
 from disEva import disEva
 from replace_chromosome import replace_chromosome
 from toChangeWeight import toChangeWeight
+from helper import save_pareto_front_csv, log_population_metrics
 
 import gbfs_globals as GG
-
-def save_pareto_front_csv(chromosome_f, i, V_f, run_dir):
-    """
-    Parameters
-    ----------
-    chromosome_f : np.ndarray
-        Population after non-domination sort (with rank & objectives).
-    i : int
-        Generation number.
-    V_f : int
-        Number of decision variables (feature-length).
-    run_dir : str
-        Directory to save files.
-    """
-    if run_dir is None:
-        return
-
-    csv_file_name = f"{run_dir}/gen_{i:03d}.csv"
-
-    ranks = chromosome_f[:, V_f + GG.M].astype(int)
-    mask = (ranks == 1)
-    pareto = chromosome_f[mask]
-
-    objs = pareto[:, V_f: V_f + GG.M]
-
-    df = pd.DataFrame(objs, columns=["obj1", "obj2"])
-    df.to_csv(csv_file_name, index=False)
-
-def log_population_metrics(chromosome_f, i, V_f, run_dir):
-    """
-    Parameters
-    ----------
-    chromosome_f : np.ndarray
-        Population after replace_chromosome (already has objectives, rank, etc.)
-    i : int
-        Generation index (starting from 1)
-    V_f : int
-        Length of decision-variable part (feature-side)
-    run_dir : str
-        Directory of the current run (to save CSV files)
-    """
-    objs = chromosome_f[:, V_f:V_f + GG.M]
-    obj1 = objs[:, 0]
-    obj2 = objs[:, 1]
-
-    mean_obj1 = float(np.mean(obj1))
-    mean_obj2 = float(np.mean(obj2))
-    std_obj1 = float(np.std(obj1))
-    std_obj2 = float(np.std(obj2))
-
-    rank_col_index = V_f + GG.M
-    if rank_col_index < chromosome_f.shape[1]:
-        ranks = chromosome_f[:, rank_col_index]
-        prop_rank1 = float(np.mean(ranks == 1))
-    else:
-        prop_rank1 = np.nan
-
-    metrics_path = os.path.join(run_dir, "pop_metrics.csv")
-
-    row = {
-        "gen": i,
-        "mean_obj1": mean_obj1,
-        "mean_obj2": mean_obj2,
-        "std_obj1": std_obj1,
-        "std_obj2": std_obj2,
-        "prop_rank1": prop_rank1,
-    }
-
-    if not os.path.exists(metrics_path):
-        df = pd.DataFrame([row])
-        df.to_csv(metrics_path, index=False)
-    else:
-        df = pd.DataFrame([row])
-        df.to_csv(metrics_path, mode="a", header=False, index=False)
 
 def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir=None):
     """

@@ -33,13 +33,11 @@ def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
     feat_part = chromes[:, :GG.featNum]
     obj_part = chromes[:, GG.featNum:GG.featNum + 2]
 
-    # alpha = 0.9; fits = alpha*abs(obj1) + (1-alpha)*(1 - obj2 / n_feat)
     alpha = 0.9
-    obj1 = np.abs(obj_part[:, 0])  # f(1)
-    obj2 = obj_part[:, 1]          # f(2) = số feature
-    n_feat = GG.featNum
+    obj1 = obj_part[:, 0]          # f(1)
+    obj2 = obj_part[:, 1]          # f(2)
 
-    fits = alpha * obj1 + (1 - alpha) * (1 - obj2 / n_feat)
+    fits = alpha * (1 - obj1) + (1 - alpha) * (1 - obj2)
 
     # choose index with fitness max
     idx = np.argmax(fits)

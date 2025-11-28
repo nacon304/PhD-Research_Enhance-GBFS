@@ -19,7 +19,7 @@ def myinputdatasetXD(i):
         Name of the dataset (first letter upper, rest lower).
     """
 
-    base_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Data"
+    base_dir = "D:/PhD/The First Paper/Code Implement/Data"
 
     # Map index -> (filename, datasetName)
     mapping = {

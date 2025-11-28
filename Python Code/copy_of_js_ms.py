@@ -1,6 +1,7 @@
 import os
 import shutil
 import numpy as np
+import pandas as pd
 from time import perf_counter
 from scipy.spatial.distance import pdist, squareform
 from sklearn.neighbors import KNeighborsClassifier
@@ -8,55 +9,9 @@ from sklearn.neighbors import KNeighborsClassifier
 from myinputdatasetXD import myinputdatasetXD
 from fisherScore import fisherScore
 from newtry_ms import newtry_ms
+from helper import _mapminmax_zero_one, redundancy_rate_subset
 
 import gbfs_globals as GG
-
-def _mapminmax_zero_one(X):
-    """
-    Regularize each column to [0, 1].
-    """
-    X = np.asarray(X, dtype=float)
-    X_min = np.min(X, axis=0)
-    X_max = np.max(X, axis=0)
-
-    denom = X_max - X_min
-    denom[denom == 0] = 1.0
-    return (X - X_min) / denom
-
-def redundancy_rate_subset(selected_features, X):
-    """
-    Calculate Red(S) for a subset S of features:
-        Red(S) = 1 / (|S|(|S|-1)) * sum_{i!=j} cos^2(fi, fj)
-
-    selected_features : array-like of indices (shape (k,))
-        Indices of selected features in S.
-    X : np.ndarray, shape (n_samples, n_features)
-        Data (preferably normalized, e.g., zData).
-    """
-    selected_features_copy = np.asarray(selected_features, dtype=int)
-    k = selected_features_copy.size
-
-    if k < 2:
-        return 0.0
-
-    F = X[:, selected_features_copy]  # each column is a feature
-
-    # Normalize each column to unit vector so cos = dot product
-    norms = np.linalg.norm(F, axis=0)
-    norms[norms == 0] = 1e-12
-    F_norm = F / norms
-
-    # Cosine matrix k×k
-    C = F_norm.T @ F_norm
-    C2 = C ** 2
-
-    # Sum of cos^2(fi, fj) with i != j
-    sum_all = np.sum(C2)
-    sum_diag = np.sum(np.diag(C2))
-    sum_pairs = sum_all - sum_diag   # exclude i=j
-
-    # Apply formula
-    return float(sum_pairs / (k * (k - 1)))
 
 def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     """
@@ -102,10 +57,17 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     GG.kNeigh = 5
 
     row = zData.shape[0]
+    GG.run_logs = {}
 
     for Rtimes in range(1, RUNS + 1):
         print(f"---- Run {Rtimes} ----")
         print(f"     kNeigh = {GG.kNeigh}")
+
+        GG.current_run = Rtimes
+        GG.run_logs[Rtimes] = {
+            "pareto_fronts": [],
+            "pop_metrics": []
+        }
 
         # reset counter (will be updated inside newtry_ms)
         GG.assiNumInside = []
@@ -184,6 +146,19 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
         T[idx] = perf_counter() - tic
 
         assiNum[idx] = np.sum(GG.assiNumInside)
+    
+    for run_id, logs in GG.run_logs.items():
+        run_dir = f"{output_dir}/run_{run_id}"
+        pop_rows = logs.get("pop_metrics", [])
+        if pop_rows:
+            df_pop = pd.DataFrame(pop_rows)
+            df_pop.to_csv(os.path.join(run_dir, "pop_metrics.csv"), index=False)
+        pareto_list = logs.get("pareto_fronts", [])
+        for entry in pareto_list:
+            gen = entry["gen"]
+            df = entry["df"]
+            csv_file_name = os.path.join(run_dir, f"gen_{gen:03d}.csv")
+            df.to_csv(csv_file_name, index=False)
 
     # ====== Append mean and std (RUNS+1, RUNS+2) ======
     ACC = np.concatenate([ACC, [ACC.mean(), ACC.std()]])

@@ -32,3 +32,7 @@ Weight = None
 
 TTT = []
 TTTT = []
+
+# logging buffers
+current_run = None
+run_logs = {} 

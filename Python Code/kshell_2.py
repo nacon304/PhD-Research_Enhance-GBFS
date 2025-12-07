@@ -66,6 +66,11 @@ def kshell_2(Gadj0):
                 D = my_degree(Gadj, featSeq)
                 D = np.asarray(D, dtype=float).ravel()
 
+        if len(featSeq) == 0:
+            if len(temp) > 0:
+                bucket.append(np.array(temp, dtype=int))
+                bucketidx += 1
+
     Nbkt = len(bucket)
     if Nbkt > 1:
         feat = select2(bucket)

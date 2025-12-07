@@ -23,11 +23,17 @@ from traditional_fs import (
     evaluate_with_knn_holdout,
 )
 
+from graph_fs import (
+    run_graph_fs_methods,
+)
+
+# =====================================================
+# 0. Helper chung
+# =====================================================
 
 def _mapminmax_zero_one(X):
     """
     Regularize each column to [0, 1].
-    (copy từ code GBFS chính để dùng lại)
     """
     X = np.asarray(X, dtype=float)
     X_min = np.min(X, axis=0)
@@ -38,6 +44,65 @@ def _mapminmax_zero_one(X):
     return (X - X_min) / denom
 
 
+def _hv_max2d(xs, ys):
+    """
+    Hypervolume cho 2D maximization với reference = (0,0),
+    mỗi điểm là (x, y) >= 0, rectangle từ (0,0) đến (x,y).
+    """
+    xs = np.asarray(xs, float)
+    ys = np.asarray(ys, float)
+    pts = np.column_stack([xs, ys])
+
+    keep = np.ones(len(pts), bool)
+    for i in range(len(pts)):
+        if not keep[i]:
+            continue
+        for j in range(len(pts)):
+            if j == i or not keep[j]:
+                continue
+            if (pts[j, 0] >= pts[i, 0] and pts[j, 1] >= pts[i, 1] and
+                (pts[j, 0] > pts[i, 0] or pts[j, 1] > pts[i, 1])):
+                keep[i] = False
+                break
+
+    pts = pts[keep]
+    if pts.size == 0:
+        return 0.0
+
+    order = np.argsort(-pts[:, 0])
+    pts = pts[order]
+
+    hv = 0.0
+    max_y = 0.0
+    for x, y in pts:
+        if y > max_y:
+            hv += x * (y - max_y)
+            max_y = y
+    return hv
+
+def hypervolume_min2d(fr, er, ref=(1.0, 1.0)):
+    """
+    Hypervolume for minimize 2D (fRatio, eRate).
+    - fr: array fRatio
+    - er: array eRate
+    - ref: reference point (fRef, eRef), (1, 1) by default.
+
+    Idea:
+      - Convert to maximization: x' = ref_x - fr, y' = ref_y - er
+      - Then use _hv_max2d.
+    """
+    fr = np.asarray(fr, float)
+    er = np.asarray(er, float)
+
+    xs = np.clip(ref[0] - fr, 0, None)
+    ys = np.clip(ref[1] - er, 0, None)
+
+    return _hv_max2d(xs, ys)
+
+# =====================================================
+# 1. GBFS on one split + build Pareto front (fRatio, eRate)
+# =====================================================
+
 def run_gbfs_on_split(
     X_raw,
     y,
@@ -45,10 +110,11 @@ def run_gbfs_on_split(
     delt,
     omega,
     kNeigh=5,
-    max_feat=20,
+    pop=20,
+    times=50,
 ):
     """
-    Chạy GBFS trên MỘT split train/test cố định (70/30).
+    Run GBFS on ONE fixed train/test split (70/30).
 
     Parameters
     ----------
@@ -56,13 +122,13 @@ def run_gbfs_on_split(
     y     : np.ndarray, shape (n_samples,)
     tr_mask : bool array, shape (n_samples,)
         True = train, False = test
-    delt, omega : tham số GBFS (DELT, OMEGA)
-    kNeigh : số kNN trên graph feature
-    max_feat : số feature tối đa yêu cầu (tham số N trong newtry_ms, nếu bạn muốn chỉnh thêm)
+    delt, omega : parameters for GBFS (DELT, OMEGA)
+    kNeigh : number of kNN graph features
+    pop, times : parameters for newtry_ms
 
     Returns
     -------
-    result : dict
+    result_best : dict
       {
         "acc": float,
         "fnum": int,
@@ -70,14 +136,22 @@ def run_gbfs_on_split(
         "time": float,
         "assiNum": float,
       }
+
+    gbfs_front : dict
+      {
+        "fRatio": np.ndarray,
+        "eRate": np.ndarray
+      }
+      with each element corresponding to a solution on the Pareto front
+      (evaluated by KNN on the same split).
     """
     tic = perf_counter()
 
-    # 1) Chuẩn hóa [0,1] toàn bộ dữ liệu (giống code cũ)
+    # 1) Normalize all data to [0,1]
     zData = _mapminmax_zero_one(X_raw)
     y = np.asarray(y).ravel().astype(int)
 
-    # 2) Gán globals để newtry_ms dùng
+    # 2) Set globals for newtry_ms
     GG.DELT = delt
     GG.OMEGA = omega
     GG.data = zData
@@ -93,19 +167,19 @@ def run_gbfs_on_split(
 
     GG.assiNumInside = []
 
-    # 3) Fisher score trên tập train -> vWeight
+    # 3) Fisher score on train set -> vWeight
     _, vWeight0 = fisherScore(GG.trData, GG.trLabel)
     GG.vWeight = 1.0 + _mapminmax_zero_one(vWeight0.reshape(-1, 1)).ravel()
     GG.vWeight1 = GG.vWeight
 
-    # 4) Xây similarity graph dựa trên correlation (giống code chính)
+    # 4) Build similarity graph based on correlation
     adj = 1.0 - pdist(GG.trData.T, metric="correlation")
     adj = np.nan_to_num(adj, nan=0.0)
     adj = np.abs(adj)
     GG.Weight = squareform(adj)
     GG.Zout = squareform(adj)
 
-    # 5) Chỉ giữ k láng giềng gần nhất cho mỗi feature
+    # 5) Keep only k nearest neighbors for each feature
     GG.kNeiMatrix = np.zeros((GG.featNum, GG.kNeigh), dtype=int)
     kNeiZoutMode = np.zeros_like(GG.Zout)
     for i in range(GG.Zout.shape[0]):
@@ -117,36 +191,489 @@ def run_gbfs_on_split(
     GG.kNeiZout = GG.Zout * (kNeiZoutMode != 0)
     kNeiAdj = squareform(GG.kNeiZout, force='tovector', checks=False)
 
-    # 6) Chạy thuật toán newtry_ms (GBFS)
-    #    20 = số cá thể, 50 = số generation → bạn có thể đưa thành tham số nếu muốn
-    featIdx = np.asarray(newtry_ms(kNeiAdj, 20, 50))
-    selected_features = np.where(featIdx != 0)[0]
+    # 6) Run newtry_ms algorithm (GBFS)
+    #    newtry_ms must return: featidx_best, pareto_masks, pareto_objs
+    out = newtry_ms(kNeiAdj, pop, times)
+
+    pareto_masks = None
+    if isinstance(out, tuple) and len(out) >= 2:
+        featidx_best = np.asarray(out[0])
+        pareto_masks = np.asarray(out[1])
+        pareto_objs = np.asarray(out[2]) if len(out) >=3 else None
+    else:
+        featidx_best = np.asarray(out)
+    
+    # pareto_indices = {}
+    # if pareto_objs is not None and pareto_objs.size > 0:
+    #     for i in range(pareto_masks.shape[0]):
+    #         mask = pareto_masks[i]
+    #         obj = pareto_objs[i]
+
+    #         frate = obj[1]
+    #         erate = obj[0]
+    #         frate_2 = sum(mask != 0)
+
+    #         if frate_2 != frate:
+    #             continue
+
+    #         if pareto_indices.get(frate) is None or erate < pareto_indices[frate][1]:
+    #             pareto_indices[frate] = (mask, erate)
+    #     pareto_masks = []
+    #     pareto_objs = []
+    #     for frate, (mask, erate) in pareto_indices.items():
+    #         pareto_masks.append(mask)
+    #         pareto_objs.append([erate, frate])
+    #     pareto_masks = np.asarray(pareto_masks)
+    #     pareto_objs = np.asarray(pareto_objs)
+
+    selected_features = np.where(featidx_best != 0)[0]
     selected_num = selected_features.size
 
-    # 7) Đánh giá bằng KNN trên cùng split
+    # 7) Evaluate "best" solution by KNN on the same split
     if selected_num == 0:
-        acc = 0.0
+        acc_best = 0.0
     else:
         knn = KNeighborsClassifier(n_neighbors=5)
         knn.fit(GG.trData[:, selected_features], GG.trLabel)
         predLabel = knn.predict(GG.teData[:, selected_features])
-        acc = np.mean(predLabel == GG.teLabel)
+        acc_best = np.mean(predLabel == GG.teLabel)
 
     runtime = perf_counter() - tic
     assiNum = float(np.sum(getattr(GG, "assiNumInside", [])))
 
-    return {
-        "acc": float(acc),
+    result_best = {
+        "acc": float(acc_best),
         "fnum": int(selected_num),
         "fset": selected_features,
         "time": float(runtime),
         "assiNum": assiNum,
     }
 
+    # 8) Build GBFS front from all Pareto solutions (if any)
+    fRatios_gb = []
+    eRates_gb = []
+
+    if pareto_masks is not None and pareto_masks.size > 0:
+        pareto_masks = np.asarray(pareto_masks)
+        if pareto_masks.ndim == 1:
+            pareto_masks = pareto_masks.reshape(1, -1)
+        
+        for mask in pareto_masks:
+            idx = np.where(mask != 0)[0]
+            k = idx.size
+            if k == 0:
+                continue
+
+            knn = KNeighborsClassifier(n_neighbors=5)
+            knn.fit(GG.trData[:, idx], GG.trLabel)
+            pred = knn.predict(GG.teData[:, idx])
+            acc = np.mean(pred == GG.teLabel)
+
+            fRatios_gb.append(k / GG.featNum)
+            eRates_gb.append(1.0 - acc)
+
+    # remove pareto solution has same feature ratio but worse error rate
+    gbfs_indx = {}
+    if len(fRatios_gb) > 0:
+        for fr, er in zip(fRatios_gb, eRates_gb):
+            if (fr not in gbfs_indx) or (er < gbfs_indx[fr]):
+                gbfs_indx[fr] = er
+        fr_list = []
+        er_list = []
+        for fr, er in gbfs_indx.items():
+            fr_list.append(fr)
+            er_list.append(er)
+
+    sort_idx = np.argsort(fr_list)
+    gbfs_front = {
+        "fRatio": np.asarray(np.array(fr_list)[sort_idx], float),
+        "eRate": np.asarray(np.array(er_list)[sort_idx], float),
+    }
+    # gbfs_front = {
+    #     "fRatio": np.asarray(np.array(fRatios_gb)[sort_idx], float),
+    #     "eRate": np.asarray(np.array(eRates_gb)[sort_idx], float),
+    # }
+    print(gbfs_front)
+
+    return result_best, gbfs_front
+
+
+# =====================================================
+# 2. Traditional FS: build curve (fRatio, eRate) based on RATIOS
+# =====================================================
+
+RATIOS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+
+def build_fronts_from_scores(scores_dict, X_train, y_train, X_test, y_test):
+    """
+    scores_dict: dict[name] -> score vector (n_features,)
+    Return:
+      fronts: dict[name] -> (fRatio_array, eRate_array)
+    """
+    n_features = X_train.shape[1]
+    fronts = {}
+
+    for name, s in scores_dict.items():
+        s = np.asarray(s).ravel()
+        # Handle NaN if any
+        s = np.nan_to_num(s, nan=0.0)
+
+        # Ranking in descending order by |score|
+        ranking = np.argsort(-np.abs(s))
+
+        fRatios = []
+        eRates = []
+
+        for r in RATIOS:
+            k = int(round(r * n_features))
+            k = max(1, min(k, n_features))
+            idx = ranking[:k]
+
+            Xtr = X_train[:, idx]
+            Xte = X_test[:, idx]
+
+            clf = KNeighborsClassifier(n_neighbors=5)
+            clf.fit(Xtr, y_train)
+            y_pred = clf.predict(Xte)
+            acc = accuracy_score(y_test, y_pred)
+
+            fRatios.append(k / n_features)
+            eRates.append(1.0 - acc)
+
+        fronts[name] = (np.asarray(fRatios), np.asarray(eRates))
+
+    return fronts
+
+
+# =====================================================
+# 3. Compare fronts: Traditional curves vs GBFS Pareto (1 split)
+# =====================================================
+
+def build_fronts_from_wrapper_methods(X_train, X_test, y_train, y_test, cv=5):
+    fronts = {}
+    for ratio in RATIOS:
+        k = int(round(ratio * X_train.shape[1]))
+        k = max(1, min(k, X_train.shape[1]))
+        selected = run_wrapper_methods(X_train, y_train, k=k, cv=cv)
+        for name, idx in selected.items():
+            Xtr = X_train[:, idx]
+            Xte = X_test[:, idx]
+
+            clf = KNeighborsClassifier(n_neighbors=5)
+            clf.fit(Xtr, y_train)
+            y_pred = clf.predict(Xte)
+            acc = accuracy_score(y_test, y_pred)
+
+            if name not in fronts:
+                fronts[name] = ([], [])
+
+            fronts[name][0].append(len(idx) / X_train.shape[1])  # fRatio
+            fronts[name][1].append(1.0 - acc)                        # eRate
+    return fronts
+
+def compare_fronts_single_split(
+    data_index=1,
+    delt=10.0,
+    omega=0.8,
+    kNeigh=5,
+):
+    # --- Load data ---
+    dataset, labels, datasetName = myinputdatasetXD(data_index)
+    X_raw = dataset[:, 1:].astype(float)
+    y = np.asarray(labels, dtype=int).ravel()
+
+    n_samples, n_features = X_raw.shape
+    print(f"Dataset: {datasetName}")
+    print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
+
+    # --- split 70/30: for both traditional + GBFS ---
+    rng = np.random.default_rng(42)
+    perm = rng.permutation(n_samples)
+    n_train = int(round(0.7 * n_samples))
+    train_idx = perm[:n_train]
+
+    tr_mask = np.zeros(n_samples, dtype=bool)
+    tr_mask[train_idx] = True
+
+    X_train_raw = X_raw[tr_mask, :]
+    X_test_raw  = X_raw[~tr_mask, :]
+    y_train     = y[tr_mask]
+    y_test      = y[~tr_mask]
+
+    # --- Baseline ALL features ---
+    scaler_all = StandardScaler()
+    Xtr_all = scaler_all.fit_transform(X_train_raw)
+    Xte_all = scaler_all.transform(X_test_raw)
+
+    clf_all = KNeighborsClassifier(n_neighbors=5)
+    clf_all.fit(Xtr_all, y_train)
+    y_pred_all = clf_all.predict(Xte_all)
+    acc_all = accuracy_score(y_test, y_pred_all)
+    print(f"[BASELINE] ALL features acc = {acc_all:.4f}")
+
+    # =============================
+    # 1) Traditional FS: get scores (ranking)
+    # =============================
+    f_scores, _ = run_all_filters(Xtr_all, y_train, k=n_features)
+    e_scores, _ = run_embedded_methods(Xtr_all, y_train, k=n_features)
+    # w_fronts = build_fronts_from_wrapper_methods(Xtr_all, Xte_all, y_train, y_test, cv=3)
+
+    all_scores = {}
+    all_scores.update(f_scores)
+    all_scores.update(e_scores)
+    # (if you want to add wrapper curves, you need to write separately,
+    #  because RFE/SFS do not provide scores for all features.)
+    # Build front (fRatio, eRate) for each traditional method
+    trad_fronts = build_fronts_from_scores(
+        all_scores, Xtr_all, y_train, Xte_all, y_test
+    )
+    # trad_fronts.update(w_fronts)
+
+    # =============================
+    # 2) GBFS: best + Pareto front (on the same split)
+    # =============================
+    gb_best, gb_front = run_gbfs_on_split(
+        X_raw, y, tr_mask,
+        delt=delt,
+        omega=omega,
+        kNeigh=kNeigh,
+        pop=20,
+        times=50,
+    )
+
+    print(f"[GBFS] best acc = {gb_best['acc']:.4f}, "
+          f"#feat = {gb_best['fnum']}")
+
+    # =============================
+    # 3) Plot: Traditional curves vs GBFS front
+    # =============================
+    plt.figure(figsize=(6, 5))
+
+    # Traditional: plot curves
+    for name, (fr, er) in trad_fronts.items():
+        plt.plot(fr, er, marker="o", linewidth=1, markersize=3, label=name)
+
+    # GBFS: plot all Pareto solutions (if any)
+    fr_gb = gb_front["fRatio"]
+    er_gb = gb_front["eRate"]
+    if fr_gb.size > 0:
+        # plt.scatter(fr_gb, er_gb, s=50, marker="*", label="GBFS Pareto")
+        plt.plot(
+            fr_gb, er_gb, marker="*", linewidth=1,
+            markersize=4, label="GBFS Pareto"
+        )
+
+    # Add baseline ALL features (1 point)
+    plt.scatter(
+        [1.0], [1.0 - acc_all],
+        s=60, marker="s", label="ALL features"
+    )
+
+    plt.xlabel("fRatio = #selected features / #total features")
+    plt.ylabel("eRate = 1 - accuracy (KNN)")
+    plt.title(f"Front comparison on {datasetName} (single 70/30 split)")
+    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+    plt.legend(fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+    return trad_fronts, gb_front, gb_best
+
+# =====================================================
+# 3b. Multi-run: select median HV front for each method
+# =====================================================
+
+# def compare_fronts_median_hv(
+#     data_index=1,
+#     delt=10.0,
+#     omega=0.8,
+#     kNeigh=5,
+#     runs=5,
+#     hv_ref=(1.0, 1.0),
+# ):
+#     # --- Load data ---
+#     dataset, labels, datasetName = myinputdatasetXD(data_index)
+#     X_raw = dataset[:, 1:].astype(float)
+#     y = np.asarray(labels, dtype=int).ravel()
+
+#     n_samples, n_features = X_raw.shape
+#     print(f"Dataset: {datasetName}")
+#     print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
+
+#     # --- fixed 70/30 split for all runs ---
+#     rng = np.random.default_rng(42)
+#     perm = rng.permutation(n_samples)
+#     n_train = int(round(0.7 * n_samples))
+#     train_idx = perm[:n_train]
+
+#     tr_mask = np.zeros(n_samples, dtype=bool)
+#     tr_mask[train_idx] = True
+
+#     X_train_raw = X_raw[tr_mask, :]
+#     X_test_raw  = X_raw[~tr_mask, :]
+#     y_train     = y[tr_mask]
+#     y_test      = y[~tr_mask]
+
+#     # --- Baseline ALL features ---
+#     scaler_all = StandardScaler()
+#     Xtr_all = scaler_all.fit_transform(X_train_raw)
+#     Xte_all = scaler_all.transform(X_test_raw)
+
+#     clf_all = KNeighborsClassifier(n_neighbors=5)
+#     clf_all.fit(Xtr_all, y_train)
+#     y_pred_all = clf_all.predict(Xte_all)
+#     acc_all = accuracy_score(y_test, y_pred_all)
+#     print(f"[BASELINE] ALL features acc = {acc_all:.4f}")
+
+#     # Prepare structures to store fronts per RUN
+#     trad_fronts_runs = []   # list[ dict[name] -> (fr, er) ]
+#     gb_fronts_runs   = []   # list[ dict("fRatio","eRate") ]
+
+#     # =============================
+#     # Multi-run
+#     # =============================
+#     for r in range(runs):
+#         print(f"\n========== FRONT RUN {r+1}/{runs} ==========")
+
+#         # 1) Traditional FS: get scores + build fronts
+#         f_scores, _ = run_all_filters(Xtr_all, y_train, k=n_features)
+#         e_scores, _ = run_embedded_methods(Xtr_all, y_train, k=n_features)
+#         w_fronts = build_fronts_from_wrapper_methods(Xtr_all, Xte_all, y_train, y_test, cv=3)
+
+#         all_scores = {}
+#         all_scores.update(f_scores)
+#         all_scores.update(e_scores)
+
+#         trad_fronts_r = build_fronts_from_scores(
+#             all_scores, Xtr_all, y_train, Xte_all, y_test
+#         )
+#         trad_fronts_r.update(w_fronts)
+#         trad_fronts_runs.append(trad_fronts_r)
+
+#         # 2) GBFS on the same split
+#         gb_best_r, gb_front_r = run_gbfs_on_split(
+#             X_raw, y, tr_mask,
+#             delt=delt,
+#             omega=omega,
+#             kNeigh=kNeigh,
+#             pop=20,
+#             times=50,
+#         )
+
+#         print(f"[GBFS run {r+1}] acc = {gb_best_r['acc']:.4f}, "
+#               f"#feat = {gb_best_r['fnum']}")
+
+#         gb_fronts_runs.append(gb_front_r)
+
+#     # =============================
+#     # Calculate hypervolume for each method on each run
+#     # =============================
+#     # Get list of traditional method names from the first run
+#     method_names = list(trad_fronts_runs[0].keys())
+
+#     hv_trad = {name: [] for name in method_names}
+#     hv_gb   = []
+
+#     # HV traditional
+#     for r in range(runs):
+#         fronts_r = trad_fronts_runs[r]
+#         for name in method_names:
+#             fr, er = fronts_r[name]
+#             hv_val = hypervolume_min2d(fr, er, ref=hv_ref)
+#             hv_trad[name].append(hv_val)
+
+#     # HV GBFS
+#     for r in range(runs):
+#         fr_gb = gb_fronts_runs[r]["fRatio"]
+#         er_gb = gb_fronts_runs[r]["eRate"]
+#         if fr_gb.size > 0:
+#             hv_val = hypervolume_min2d(fr_gb, er_gb, ref=hv_ref)
+#         else:
+#             hv_val = 0.0
+#         hv_gb.append(hv_val)
+
+#     # Convert to np.array
+#     for name in hv_trad:
+#         hv_trad[name] = np.asarray(hv_trad[name], float)
+#     hv_gb = np.asarray(hv_gb, float)
+
+#     # =============================
+#     # Select median HV front for each method
+#     # =============================
+#     median_trad_fronts = {}
+
+#     for name in method_names:
+#         hv_arr = hv_trad[name]
+#         median_val = np.median(hv_arr)
+#         idx = int(np.argsort(np.abs(hv_arr - median_val))[0])
+#         median_trad_fronts[name] = trad_fronts_runs[idx][name]
+#         print(f"[TRAD {name}] median HV = {median_val:.6f}, "
+#               f"chọn run {idx+1} (HV = {hv_arr[idx]:.6f})")
+
+#     # GBFS
+#     if hv_gb.size > 0:
+#         median_gb = np.median(hv_gb)
+#         idx_gb = int(np.argsort(np.abs(hv_gb - median_gb))[0])
+#         median_gb_front = gb_fronts_runs[idx_gb]
+#         print(f"[GBFS] median HV = {median_gb:.6f}, "
+#               f"chọn run {idx_gb+1} (HV = {hv_gb[idx_gb]:.6f})")
+#     else:
+#         median_gb_front = {"fRatio": np.array([]), "eRate": np.array([])}
+#         idx_gb = -1
+#         median_gb = 0.0
+
+#     # =============================
+#     # Plot: use median HV front of EACH method
+#     # =============================
+#     plt.figure(figsize=(6, 5))
+
+#     # Traditional: plot median curves
+#     for name, (fr, er) in median_trad_fronts.items():
+#         plt.plot(fr, er, marker="o", linewidth=1, markersize=3, label=name)
+
+#     # GBFS: plot median HV front, connect into a line
+#     fr_gb = median_gb_front["fRatio"]
+#     er_gb = median_gb_front["eRate"]
+#     if fr_gb.size > 0:
+#         order = np.argsort(fr_gb)
+#         plt.plot(
+#             fr_gb[order],
+#             er_gb[order],
+#             marker="*",
+#             linestyle="-",
+#             linewidth=1.5,
+#             markersize=6,
+#             label=f"GBFS Pareto (median HV)",
+#         )
+
+#     # Baseline ALL features (1 point)
+#     plt.scatter(
+#         [1.0], [1.0 - acc_all],
+#         s=60, marker="s", label="ALL features"
+#     )
+
+#     plt.xlabel("fRatio = #selected features / #total features")
+#     plt.ylabel("eRate = 1 - accuracy (KNN)")
+#     plt.title(
+#         f"Median-HV fronts on {datasetName} "
+#         f"(single 70/30 split, {runs} runs per method)"
+#     )
+#     plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+#     plt.legend(fontsize=8)
+#     plt.tight_layout()
+#     plt.show()
+
+#     return median_trad_fronts, median_gb_front, hv_trad, hv_gb
+
+# =====================================================
+# 4. (Optional) Old multi-run function: use GBFS best (no front needed)
+# =====================================================
+
 def generate_splits(n_samples, runs=20, train_ratio=0.7, random_state=42):
     """
-    Sinh danh sách bool mask cho RUNS lần random 70/30.
-    Dùng chung cho GBFS + tất cả traditional FS.
+    Generate list of bool masks for RUNS times random 70/30 splits.
+    Shared for GBFS + all traditional FS.
     """
     rng = np.random.default_rng(random_state)
     splits = []
@@ -161,15 +688,167 @@ def generate_splits(n_samples, runs=20, train_ratio=0.7, random_state=42):
 
     return splits
 
-def compare_gbfs_vs_traditional(
-    data_index=2,
-    runs=20,
+
+# def compare_gbfs_vs_traditional(
+#     data_index=2,
+#     runs=20,
+#     delt=10.0,
+#     omega=0.8,
+#     kNeigh=5,
+#     max_k_fs=None,
+# ):
+#     """
+#     Multi-run function to compare mean±std accuracy, without using fronts.
+#     """
+#     # --- Load data ---
+#     dataset, labels, datasetName = myinputdatasetXD(data_index)
+#     X_raw = dataset[:, 1:].astype(float)
+#     y = np.asarray(labels, dtype=int).ravel()
+
+#     n_samples, n_features = X_raw.shape
+#     print(f"Dataset: {datasetName}")
+#     print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
+
+#     if max_k_fs is None:
+#         max_k_fs = min(20, max(1, n_features // 2))  # avoid > #features
+
+#     # --- Generate common 70/30 splits ---
+#     splits = generate_splits(n_samples, runs=runs, train_ratio=0.7, random_state=42)
+
+#     # Store results
+#     accs_traditional = {}   # name -> list[acc]
+#     gbfs_accs = []
+#     gbfs_fnums = []
+
+#     for r, tr_mask in enumerate(splits, start=1):
+#         print(f"\n========== RUN {r}/{runs} ==========")
+
+#         X_train_raw = X_raw[tr_mask, :]
+#         X_test_raw  = X_raw[~tr_mask, :]
+#         y_train     = y[tr_mask]
+#         y_test      = y[~tr_mask]
+
+#         # --- Baseline KNN with ALL features on this split ---
+#         scaler_all = StandardScaler()
+#         X_train_all = scaler_all.fit_transform(X_train_raw)
+#         X_test_all  = scaler_all.transform(X_test_raw)
+
+#         clf_all = KNeighborsClassifier(n_neighbors=5)
+#         clf_all.fit(X_train_all, y_train)
+#         y_pred_all = clf_all.predict(X_test_all)
+#         acc_all = accuracy_score(y_test, y_pred_all)
+#         print(f"[RUN {r}] Baseline ALL features acc = {acc_all:.4f}")
+
+#         # =============================
+#         # 1) Traditional Feature Selection
+#         # =============================
+#         f_scores, f_selected = run_all_filters(X_train_raw, y_train, k=max_k_fs)
+#         e_scores, e_selected = run_embedded_methods(X_train_raw, y_train, k=max_k_fs)
+#         w_selected = run_wrapper_methods(X_train_raw, y_train, k=max_k_fs, cv=5)
+
+#         # Combine all subsets
+#         all_selected = {}
+#         all_selected.update(f_selected)
+#         all_selected.update(e_selected)
+#         all_selected.update(w_selected)
+#         all_selected["ALL_features"] = np.arange(n_features)
+
+#         # Evaluate on the same split
+#         accs = evaluate_with_knn_holdout(
+#             X_train_raw, y_train,
+#             X_test_raw,  y_test,
+#             all_selected,
+#             n_neighbors=5,
+#         )
+#         # ALL_features uses baseline acc_all to ensure consistency
+#         accs["ALL_features"] = acc_all
+
+#         # Store acc for each method
+#         for name, acc in accs.items():
+#             accs_traditional.setdefault(name, []).append(acc)
+
+#         # =============================
+#         # 2) GBFS on the same split
+#         # =============================
+#         gb_result, _ = run_gbfs_on_split(
+#             X_raw, y, tr_mask,
+#             delt=delt,
+#             omega=omega,
+#             kNeigh=kNeigh,
+#             pop=20,
+#             times=50,
+#         )
+#         gbfs_accs.append(gb_result["acc"])
+#         gbfs_fnums.append(gb_result["fnum"])
+
+#         print(f"[RUN {r}] GBFS acc = {gb_result['acc']:.4f}, "
+#               f"#feat = {gb_result['fnum']}")
+
+#     # =============================
+#     # Calculate mean / std for each method
+#     # =============================
+#     summary = []
+
+#     # Traditional
+#     for name, arr in accs_traditional.items():
+#         arr = np.asarray(arr, dtype=float)
+#         mean_acc = arr.mean()
+#         std_acc  = arr.std()
+
+#         if name == "ALL_features":
+#             fnum = n_features
+#         else:
+#             fnum = max_k_fs
+
+#         fRatio = fnum / n_features
+#         eRate  = 1.0 - mean_acc
+
+#         summary.append({
+#             "method": name,
+#             "mean_acc": mean_acc,
+#             "std_acc": std_acc,
+#             "num_features": fnum,
+#             "fRatio": fRatio,
+#             "eRate": eRate,
+#         })
+
+#     # GBFS
+#     gbfs_accs = np.asarray(gbfs_accs, dtype=float)
+#     gbfs_fnums = np.asarray(gbfs_fnums, dtype=float)
+#     gb_fmean = gbfs_fnums.mean() if gbfs_fnums.size > 0 else 0.0
+
+#     gb_summary = {
+#         "method": "GBFS",
+#         "mean_acc": gbfs_accs.mean() if gbfs_accs.size > 0 else 0.0,
+#         "std_acc": gbfs_accs.std() if gbfs_accs.size > 0 else 0.0,
+#         "num_features": gb_fmean,
+#         "fRatio": gb_fmean / n_features if n_features > 0 else 0.0,
+#         "eRate": 1.0 - (gbfs_accs.mean() if gbfs_accs.size > 0 else 0.0),
+#     }
+#     summary.append(gb_summary)
+
+#     summary = sorted(summary, key=lambda d: -d["mean_acc"])
+
+#     print("\n===== SUMMARY (mean ± std acc, #feat) =====")
+#     for s in summary:
+#         print(f"{s['method']:18s}: "
+#               f"acc = {s['mean_acc']:.4f} ± {s['std_acc']:.4f}, "
+#               f"#feat ≈ {s['num_features']:.1f} "
+#               f"(fRatio = {s['fRatio']:.3f}, eRate = {s['eRate']:.3f})")
+
+#     # (bar/scatter plots remain unchanged if you still need them)
+
+#     return summary
+
+def compare_fronts_median_hv(
+    data_index=1,
     delt=10.0,
     omega=0.8,
     kNeigh=5,
-    max_k_fs=None,
+    runs=5,
+    hv_ref=(1.0, 1.0),
 ):
-    # --- Load dữ liệu ---
+    # --- Load data ---
     dataset, labels, datasetName = myinputdatasetXD(data_index)
     X_raw = dataset[:, 1:].astype(float)
     y = np.asarray(labels, dtype=int).ravel()
@@ -178,137 +857,208 @@ def compare_gbfs_vs_traditional(
     print(f"Dataset: {datasetName}")
     print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
 
-    if max_k_fs is None:
-        max_k_fs = min(20, max(1, n_features // 2))  # tránh > #features
+    # --- fixed 70/30 split for all runs ---
+    rng = np.random.default_rng(42)
+    perm = rng.permutation(n_samples)
+    n_train = int(round(0.7 * n_samples))
+    train_idx = perm[:n_train]
 
-    # --- Sinh splits 70/30 chung ---
-    splits = generate_splits(n_samples, runs=runs, train_ratio=0.7, random_state=42)
+    tr_mask = np.zeros(n_samples, dtype=bool)
+    tr_mask[train_idx] = True
 
-    # Lưu kết quả
-    accs_traditional = {}   # name -> list[acc]
-    gbfs_accs = []
-    gbfs_fnums = []
+    X_train_raw = X_raw[tr_mask, :]
+    X_test_raw  = X_raw[~tr_mask, :]
+    y_train     = y[tr_mask]
+    y_test      = y[~tr_mask]
 
-    for r, tr_mask in enumerate(splits, start=1):
-        print(f"\n========== RUN {r}/{runs} ==========")
+    # --- Baseline ALL features ---
+    scaler_all = StandardScaler()
+    Xtr_all = scaler_all.fit_transform(X_train_raw)
+    Xte_all = scaler_all.transform(X_test_raw)
 
-        X_train_raw = X_raw[tr_mask, :]
-        X_test_raw  = X_raw[~tr_mask, :]
-        y_train     = y[tr_mask]
-        y_test      = y[~tr_mask]
+    clf_all = KNeighborsClassifier(n_neighbors=5)
+    clf_all.fit(Xtr_all, y_train)
+    y_pred_all = clf_all.predict(Xte_all)
+    acc_all = accuracy_score(y_test, y_pred_all)
+    print(f"[BASELINE] ALL features acc = {acc_all:.4f}")
 
-        # --- Baseline KNN với ALL features trên split này ---
-        scaler_all = StandardScaler()
-        X_train_all = scaler_all.fit_transform(X_train_raw)
-        X_test_all  = scaler_all.transform(X_test_raw)
+    # Prepare structures to store fronts per RUN
+    trad_fronts_runs = []   # list[ dict[name] -> (fr, er) ]
+    gb_fronts_runs   = []   # list[ dict("fRatio","eRate") ]
 
-        clf_all = KNeighborsClassifier(n_neighbors=5)
-        clf_all.fit(X_train_all, y_train)
-        y_pred_all = clf_all.predict(X_test_all)
-        acc_all = accuracy_score(y_test, y_pred_all)
-        print(f"[RUN {r}] Baseline ALL features acc = {acc_all:.4f}")
+    # For HV + acc best
+    hv_trad = {}            # name -> list[HV per run]
+    hv_gb   = []            # list[HV per run]
+    acc_trad = {}           # name -> list[best acc per run]
+    fratio_best_trad = {}   # name -> list[best fRatio per run]
+    gb_accs = []            # list[best acc per run for GBFS]
+    gb_fratios_best = []    # list[best fRatio per run for GBFS]
 
-        # =============================
-        # 1) Traditional Feature Selection
-        # =============================
-        # FILTERS
-        f_scores, f_selected = run_all_filters(X_train_raw, y_train, k=max_k_fs)
+    # =============================
+    # Multi-run
+    # =============================
+    f_scores, _ = run_all_filters(Xtr_all, y_train, k=n_features)
+    g_scores, _ = run_graph_fs_methods(
+        X_train_raw, y_train,
+        k=n_features,
+        use_inffs=True,
+        use_ugfs=True,
+    )
+    for r in range(runs):
+        print(f"\n========== FRONT RUN {r+1}/{runs} ==========")
 
-        # EMBEDDED
-        e_scores, e_selected = run_embedded_methods(X_train_raw, y_train, k=max_k_fs)
+        # 1) Traditional FS: get scores + build fronts
+        e_scores, _ = run_embedded_methods(Xtr_all, y_train, k=n_features)
+        # w_fronts = build_fronts_from_wrapper_methods(
+        #     Xtr_all, Xte_all, y_train, y_test, cv=3
+        # )
 
-        # WRAPPERS (cẩn thận runtime nếu dataset rất lớn)
-        w_selected = run_wrapper_methods(X_train_raw, y_train, k=max_k_fs, cv=5)
+        all_scores = {}
+        all_scores.update(f_scores)
+        all_scores.update(e_scores)
+        all_scores.update(g_scores)
 
-        # Gộp tất cả subset
-        all_selected = {}
-        all_selected.update(f_selected)
-        all_selected.update(e_selected)
-        all_selected.update(w_selected)
-        all_selected["ALL_features"] = np.arange(n_features)
-
-        # Đánh giá trên cùng split
-        accs = evaluate_with_knn_holdout(
-            X_train_raw, y_train,
-            X_test_raw,  y_test,
-            all_selected,
-            n_neighbors=5,
+        trad_fronts_r = build_fronts_from_scores(
+            all_scores, Xtr_all, y_train, Xte_all, y_test
         )
-        # ALL_features dùng baseline acc_all để đảm bảo thống nhất
-        accs["ALL_features"] = acc_all
+        # trad_fronts_r.update(w_fronts)
+        trad_fronts_runs.append(trad_fronts_r)
 
-        # Lưu acc theo từng phương pháp
-        for name, acc in accs.items():
-            accs_traditional.setdefault(name, []).append(acc)
-
-        # =============================
-        # 2) GBFS trên cùng split
-        # =============================
-        gb_result = run_gbfs_on_split(
+        # 2) GBFS on the same split
+        gb_best_r, gb_front_r = run_gbfs_on_split(
             X_raw, y, tr_mask,
             delt=delt,
             omega=omega,
             kNeigh=kNeigh,
-            max_feat=max_k_fs,
+            pop=20,
+            times=50,
         )
-        gbfs_accs.append(gb_result["acc"])
-        gbfs_fnums.append(gb_result["fnum"])
 
-        print(f"[RUN {r}] GBFS acc = {gb_result['acc']:.4f}, "
-              f"#feat = {gb_result['fnum']}")
+        print(f"[GBFS run {r+1}] acc = {gb_best_r['acc']:.4f}, "
+              f"#feat = {gb_best_r['fnum']}")
+
+        gb_fronts_runs.append(gb_front_r)
+
+        # ----- CALCULATE HV + BEST ACC FOR THIS RUN -----
+
+        # Traditional methods
+        for name, (fr, er) in trad_fronts_r.items():
+            fr = np.asarray(fr, float)
+            er = np.asarray(er, float)
+            # Hypervolume
+            hv_val = hypervolume_min2d(fr, er, ref=hv_ref)
+            hv_trad.setdefault(name, []).append(hv_val)
+
+            # Best acc = 1 - min(eRate)
+            if er.size > 0:
+                idx_best = int(np.argmin(er))
+                best_e = float(er[idx_best])
+                best_acc = 1.0 - best_e
+                best_fr = float(fr[idx_best])
+            else:
+                best_acc = 0.0
+                best_fr = 0.0
+
+            acc_trad.setdefault(name, []).append(best_acc)
+            fratio_best_trad.setdefault(name, []).append(best_fr)
+
+        # GBFS
+        fr_gb_r = gb_front_r["fRatio"]
+        er_gb_r = gb_front_r["eRate"]
+        if fr_gb_r.size > 0:
+            hv_val_gb = hypervolume_min2d(fr_gb_r, er_gb_r, ref=hv_ref)
+            best_acc_gb = float(gb_best_r["acc"])
+            best_fr_gb = float(gb_best_r["fnum"] / n_features)
+        else:
+            hv_val_gb = 0.0
+            best_acc_gb = 0.0
+            best_fr_gb = 0.0
+
+        hv_gb.append(hv_val_gb)
+        gb_accs.append(best_acc_gb)
+        gb_fratios_best.append(best_fr_gb)
+
+    # Convert lists to np.array
+    for name in hv_trad:
+        hv_trad[name] = np.asarray(hv_trad[name], float)
+        acc_trad[name] = np.asarray(acc_trad[name], float)
+        fratio_best_trad[name] = np.asarray(fratio_best_trad[name], float)
+
+    hv_gb = np.asarray(hv_gb, float)
+    gb_accs = np.asarray(gb_accs, float)
+    gb_fratios_best = np.asarray(gb_fratios_best, float)
 
     # =============================
-    # Tính mean / std cho từng phương pháp
+    # Select median HV front for each method
+    # =============================
+    median_trad_fronts = {}
+
+    for name, hv_arr in hv_trad.items():
+        median_val = np.median(hv_arr)
+        idx = int(np.argsort(np.abs(hv_arr - median_val))[0])
+        median_trad_fronts[name] = trad_fronts_runs[idx][name]
+        print(f"[TRAD {name}] median HV = {median_val:.6f}, "
+              f"choose run {idx+1} (HV = {hv_arr[idx]:.6f})")
+
+    # GBFS
+    if hv_gb.size > 0:
+        median_gb = np.median(hv_gb)
+        idx_gb = int(np.argsort(np.abs(hv_gb - median_gb))[0])
+        median_gb_front = gb_fronts_runs[idx_gb]
+        print(f"[GBFS] median HV = {median_gb:.6f}, "
+              f"choose run {idx_gb+1} (HV = {hv_gb[idx_gb]:.6f})")
+    else:
+        median_gb_front = {"fRatio": np.array([]), "eRate": np.array([])}
+        idx_gb = -1
+        median_gb = 0.0
+
+    # =============================
+    # SUMMARY mean ± std ACC (with best point on front)
     # =============================
     summary = []
 
     # Traditional
-    for name, arr in accs_traditional.items():
-        arr = np.asarray(arr, dtype=float)
-        mean_acc = arr.mean()
-        std_acc  = arr.std()
+    for name in sorted(hv_trad.keys()):
+        acc_arr = acc_trad[name]
+        fr_arr  = fratio_best_trad[name]
 
-        if name == "ALL_features":
-            fnum = n_features
-        else:
-            # Trong code trên, k cố định = max_k_fs cho tất cả FS
-            fnum = max_k_fs
+        mean_acc = acc_arr.mean()
+        std_acc  = acc_arr.std()
+        mean_fRatio = fr_arr.mean()
+        mean_fnum   = mean_fRatio * n_features
 
-        fRatio = fnum / n_features
-        eRate  = 1.0 - mean_acc
+        eRate_mean = 1.0 - mean_acc
 
         summary.append({
             "method": name,
-            "mean_acc": mean_acc,
-            "std_acc": std_acc,
-            "num_features": fnum,
-            "fRatio": fRatio,
-            "eRate": eRate,
+            "mean_acc": float(mean_acc),
+            "std_acc": float(std_acc),
+            "num_features": float(mean_fnum),
+            "fRatio": float(mean_fRatio),
+            "eRate": float(eRate_mean),
         })
 
     # GBFS
-    gbfs_accs = np.asarray(gbfs_accs, dtype=float)
-    gbfs_fnums = np.asarray(gbfs_fnums, dtype=float)
-
-    if gbfs_fnums.size == 0:
-        gb_fmean = 0.0
+    if gb_accs.size > 0:
+        mean_acc_gb = gb_accs.mean()
+        std_acc_gb  = gb_accs.std()
+        mean_fRatio_gb = gb_fratios_best.mean()
+        mean_fnum_gb   = mean_fRatio_gb * n_features
     else:
-        gb_fmean = gbfs_fnums.mean()
+        mean_acc_gb = std_acc_gb = mean_fRatio_gb = mean_fnum_gb = 0.0
 
-    gb_summary = {
+    summary.append({
         "method": "GBFS",
-        "mean_acc": gbfs_accs.mean() if gbfs_accs.size > 0 else 0.0,
-        "std_acc": gbfs_accs.std() if gbfs_accs.size > 0 else 0.0,
-        "num_features": gb_fmean,
-        "fRatio": gb_fmean / n_features if n_features > 0 else 0.0,
-        "eRate": 1.0 - (gbfs_accs.mean() if gbfs_accs.size > 0 else 0.0),
-    }
-    summary.append(gb_summary)
+        "mean_acc": float(mean_acc_gb),
+        "std_acc": float(std_acc_gb),
+        "num_features": float(mean_fnum_gb),
+        "fRatio": float(mean_fRatio_gb),
+        "eRate": float(1.0 - mean_acc_gb),
+    })
 
-    # Sắp xếp cho đẹp khi vẽ (theo mean_acc giảm dần)
     summary = sorted(summary, key=lambda d: -d["mean_acc"])
 
-    print("\n===== SUMMARY (mean ± std acc, #feat) =====")
+    print("\n===== SUMMARY (best acc per run, mean ± std, #feat) =====")
     for s in summary:
         print(f"{s['method']:18s}: "
               f"acc = {s['mean_acc']:.4f} ± {s['std_acc']:.4f}, "
@@ -316,64 +1066,75 @@ def compare_gbfs_vs_traditional(
               f"(fRatio = {s['fRatio']:.3f}, eRate = {s['eRate']:.3f})")
 
     # =============================
-    # Vẽ hình minh họa
+    # Plot: use median HV front of EACH method
     # =============================
-    methods = [s["method"] for s in summary]
-    mean_acc = [s["mean_acc"] for s in summary]
-    std_acc  = [s["std_acc"]  for s in summary]
-    fRatios  = [s["fRatio"]   for s in summary]
-    eRates   = [s["eRate"]    for s in summary]
+    plt.figure(figsize=(6, 5))
 
-    # ---- Hình 1: Bar chart accuracy ----
-    plt.figure(figsize=(8, 4))
-    x = np.arange(len(methods))
-    plt.bar(x, mean_acc, yerr=std_acc, capsize=3)
-    plt.xticks(x, methods, rotation=45, ha="right")
-    plt.ylabel("Test accuracy (KNN)")
-    plt.title(f"Accuracy comparison on {datasetName} (70/30, {runs} runs)")
-    plt.tight_layout()
+    # Traditional: plot median curves
+    for name, (fr, er) in median_trad_fronts.items():
+        plt.plot(fr, er, marker="o", linewidth=1, markersize=3, label=name)
 
-    # ---- Hình 2: Bar chart fRatio (#feature / tổng) ----
-    plt.figure(figsize=(8, 4))
-    plt.bar(x, fRatios)
-    plt.xticks(x, methods, rotation=45, ha="right")
-    plt.ylabel("fRatio = #selected features / #total features")
-    plt.title(f"Feature ratio comparison on {datasetName}")
-    plt.tight_layout()
+    # GBFS: plot median HV front, connect into a line
+    fr_gb_plot = median_gb_front["fRatio"]
+    er_gb_plot = median_gb_front["eRate"]
+    if fr_gb_plot.size > 0:
+        order = np.argsort(fr_gb_plot)
+        plt.plot(
+            fr_gb_plot[order],
+            er_gb_plot[order],
+            marker="*",
+            linestyle="-",
+            linewidth=1.5,
+            markersize=6,
+            label=f"GBFS Pareto (median HV)",
+        )
 
-    # ---- Hình 3: Scatter fRatio vs eRate (giống front đơn giản) ----
-    plt.figure(figsize=(5, 4))
-    for s in summary:
-        m = s["method"]
-        fr = s["fRatio"]
-        er = s["eRate"]
-        if m == "GBFS":
-            plt.scatter(fr, er, s=80, marker="*", label=m)   # highlight GBFS
-        else:
-            plt.scatter(fr, er, s=40, marker="o", label=m)
+    # Baseline ALL features (1 point)
+    plt.scatter(
+        [1.0], [1.0 - acc_all],
+        s=60, marker="s", label="ALL features"
+    )
 
-    # Tránh duplicate legend label
-    handles, labels = plt.gca().get_legend_handles_labels()
-    uniq = dict(zip(labels, handles))
-    plt.legend(uniq.values(), uniq.keys(), fontsize=8)
-
-    plt.xlabel("fRatio (smaller is sparser)")
-    plt.ylabel("eRate = 1 - accuracy (smaller is better)")
-    plt.title(f"fRatio vs eRate on {datasetName}")
+    plt.xlabel("fRatio = #selected features / #total features")
+    plt.ylabel("eRate = 1 - accuracy (KNN)")
+    plt.title(
+        f"Median-HV fronts on {datasetName} "
+        f"(single 70/30 split, {runs} runs per method)"
+    )
     plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+    plt.legend(fontsize=8)
     plt.tight_layout()
-
     plt.show()
 
-    return summary
+    return median_trad_fronts, median_gb_front, hv_trad, hv_gb, summary
+
+
+# =====================================================
+# 5. Main
+# =====================================================
 
 if __name__ == "__main__":
-    # Ví dụ: dataset Glass, index = 1
-    summary = compare_gbfs_vs_traditional(
-        data_index=1,
-        runs=20,       # số lần lặp split 70/30
-        delt=10.0,     # tinh chỉnh theo best setting của bạn
+    # trad_fronts, gb_front, gb_best = compare_fronts_single_split(
+    #     data_index=1,
+    #     delt=10.0,
+    #     omega=0.8,
+    #     kNeigh=5,
+    # )
+
+    median_trad_fronts, median_gb_front, hv_trad, hv_gb, summary = compare_fronts_median_hv(
+        data_index=2,
+        delt=10.0,
         omega=0.8,
         kNeigh=5,
-        max_k_fs=None,  # nếu None → auto = min(20, n_feat/2)
+        runs=5,
+        hv_ref=(1.0, 1.0),
     )
+
+    # summary = compare_gbfs_vs_traditional(
+    #     data_index=1,
+    #     runs=5,
+    #     delt=10.0,
+    #     omega=0.8,
+    #     kNeigh=5,
+    #     max_k_fs=None,
+    # )

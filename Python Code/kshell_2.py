@@ -1,89 +1,101 @@
 import numpy as np
-from my_degree import my_degree
-from select2 import select2
 
-def kshell_2(Gadj0):
+
+def kshell_2(Gadj0, nodes=None, node_weights=None):
     """
+    Weighted k-shell decomposition + selection.
+
     Parameters
     ----------
-    Gadj0 : array-like, shape (n_features, n_features)
-        Adjacency matrix.
+    Gadj0 : array-like, shape (d, d)
+        Weighted adjacency matrix (redundancy or complementary).
+    nodes : array-like of int, optional
+        List of node indices (trong [0..d-1]) tham gia k-shell.
+        Nếu None -> dùng toàn bộ nodes [0..d-1].
+    node_weights : array-like, shape (d,), optional
+        Trọng số node w_i (relevance / combined relevance+complementarity).
+        Nếu None -> tất cả w_i = 1.
 
     Returns
     -------
-    p : np.ndarray, 1D, dtype=int
-        Sorted indices of selected features (0-based).
+    selected : np.ndarray, 1D dtype=int
+        Tập node được chọn:
+        - tất cả node trong shell cao nhất,
+        - cộng thêm 1 node có weight lớn nhất từ mỗi shell còn lại.
     """
-    Gadj = np.array(Gadj0, dtype=float).copy()
-    _, M = Gadj.shape
+    W = np.asarray(Gadj0, dtype=float)
+    if W.ndim != 2 or W.shape[0] != W.shape[1]:
+        raise ValueError("kshell_2: Gadj0 phải là ma trận vuông (d x d).")
 
-    featSeq = list(range(M))
+    d = W.shape[0]
 
-    bucket = []
-    temp = []
-    it = 1
-    bucketidx = 0
-
-    # loop until all nodes are removed
-    while len(featSeq) > 0:
-        # degree measure on current subgraph
-        # print(f"Iteration {it}, remaining nodes: {len(featSeq)}")
-        D = my_degree(Gadj, featSeq)
-        D = np.asarray(D, dtype=float).ravel()
-
-        if np.isnan(D).any():
-            raise ValueError("Degree vector contains NaN.")
-
-        minD = np.min(D)
-
-        while True:
-            # indices (positions) in featSeq that have minimal degree
-            feat_pos = np.where(D == minD)[0]
-            # print(feat_pos)
-
-            if feat_pos.size == 0:
-                # store current shell
-                bucket.append(np.array(temp, dtype=int))
-                temp = []
-                bucketidx += 1
-                it += 1
-                break
-            else:
-                a = [featSeq[pos] for pos in feat_pos]
-                # print(f"Nodes with degree {minD}: {a}")
-
-                # add to current bucket
-                temp.extend(a)
-
-                # remove these nodes from featSeq
-                for pos in sorted(feat_pos, reverse=True):
-                    del featSeq[pos]
-
-                # remove their edges from adjacency matrix
-                Gadj[feat_pos, :] = 0
-                Gadj[:, feat_pos] = 0
-
-                # recompute degree for remaining nodes
-                if len(featSeq) == 0:
-                    break
-                D = my_degree(Gadj, featSeq)
-                D = np.asarray(D, dtype=float).ravel()
-
-        if len(featSeq) == 0:
-            if len(temp) > 0:
-                bucket.append(np.array(temp, dtype=int))
-                bucketidx += 1
-
-    Nbkt = len(bucket)
-    # print(f"Number of shells (buckets) = {Nbkt}")
-    # print(Gadj0)
-    if Nbkt > 1:
-        feat = select2(bucket)
-        p = np.concatenate(
-            [np.asarray(feat, dtype=int).ravel(), bucket[Nbkt - 1].ravel()]
-        )
+    if nodes is None:
+        active = list(range(d))
     else:
-        p = bucket[Nbkt - 1].ravel()
+        nodes = np.asarray(nodes, dtype=int).ravel()
+        active = list(nodes)
 
-    p = np.sort(p)
-    return p
+    if node_weights is None:
+        w_full = np.ones(d, dtype=float)
+    else:
+        w_full = np.asarray(node_weights, dtype=float).ravel()
+        if w_full.size != d:
+            raise ValueError(
+                f"kshell_2: kích thước node_weights={w_full.size} "
+                f"không khớp số node d={d}."
+            )
+
+    buckets = []
+    eps = 1e-12
+
+    # Lặp cho đến khi không còn node trong active
+    while len(active) > 0:
+        # weighted-degree cho từng node trong active
+        degs = np.zeros(len(active), dtype=float)
+        for idx, node in enumerate(active):
+            # tổng trọng số cạnh đến các node active khác
+            degs[idx] = w_full[node] * np.sum(W[node, active])
+
+        # nếu mọi degree đều 0 -> tất cả active nằm trong 1 shell cuối
+        if np.all(degs <= 0):
+            buckets.append(np.array(active, dtype=int))
+            break
+
+        minD = degs.min()
+        # shell hiện tại = tất cả node có deg gần minD
+        shell_nodes = [
+            active[i] for i in range(len(active)) if degs[i] <= minD + eps
+        ]
+
+        if len(shell_nodes) == 0:
+            # đề phòng số học lạ, cho tất cả vào 1 shell
+            buckets.append(np.array(active, dtype=int))
+            break
+
+        buckets.append(np.array(shell_nodes, dtype=int))
+
+        # loại các node này khỏi active
+        active = [node for node in active if node not in shell_nodes]
+
+    if len(buckets) == 0:
+        return np.array([], dtype=int)
+
+    # Chọn:
+    # - tất cả node trong bucket cuối (shell cao nhất)
+    # - 1 node có weight lớn nhất từ mỗi bucket trước đó
+    if len(buckets) == 1:
+        selected = np.sort(buckets[0])
+    else:
+        last_shell = buckets[-1]
+        selected_list = list(last_shell)
+
+        for shell in buckets[:-1]:
+            if shell.size == 0:
+                continue
+            best_node = shell[np.argmax(w_full[shell])]
+            if best_node not in selected_list:
+                selected_list.append(best_node)
+
+        selected = np.array(sorted(selected_list), dtype=int)
+
+    return selected

@@ -48,22 +48,31 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
     if gen < 5:
         raise ValueError("Minimum number of generations is 5")
 
-    M = 2
+    M = 2  # number of objectives
 
     # ----- Initialize population (feature-side) -----
     chromosome_f, featIdx = initialize_variables_f(pop, M, V_f, templateAdj)
+    # print("Initial chromosome_f:")
+    # print(chromosome_f)
+    # print("Initial featIdx:")
+    # print(featIdx)
 
-    # Sort initial population by non-domination
-    chromosome_f = non_domination_sort_mod(chromosome_f, M, V_f)
+    # Sort initial population by non-domination (sync chromosome_f & featIdx)
+    chromosome_f, featIdx = non_domination_sort_mod(chromosome_f, M, V_f, featIdx)
+    # print("After initial non-dominated sorting:")
+    # print(chromosome_f)
+    # print(featIdx)
 
     # ----- Evolution process -----
-    shareFlag = False              # flag for weight sharing
-    arChive = np.empty((0, 0))     # archive of feature subsets
-    kGenWeiArchive = np.array([])  # archive of "weight" evaluations
-    kGenAccArchive = np.array([])  # archive of accuracies
+    shareFlag = False
+    arChive = np.empty((0, GG.featNum))  # archive of feature subsets
+    kGenWeiArchive = np.array([])        # archive of "weight" evaluations
+    kGenAccArchive = np.array([])        # archive of accuracies
     archivePop = pop
 
     for i in range(1, gen + 1):
+        # print(f"\n=== Generation {i} ===")
+
         # --- Parent selection ---
         pool = int(round(pop / 2.0))
         tour = 2
@@ -75,6 +84,10 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
         offspring_chromosome_f, featIdx_f = genetic_operator_f(
             parent_chromosome_f, M, V_f, px, pm, templateAdj
         )
+        # print("Offspring chromosome_f:")
+        # print(offspring_chromosome_f)
+        # print("Offspring featIdx_f:")
+        # print(featIdx_f)
 
         # --- Build intermediate population (chromosome_f) ---
         main_pop_f = chromosome_f.shape[0]
@@ -87,38 +100,39 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
 
         # parents
         intermediate_chromosome_f[:main_pop_f, :] = chromosome_f
+        # offspring: copy decision vars + objective values; rank & crowding will be updated
         intermediate_chromosome_f[
             main_pop_f : main_pop_f + offspring_pop_f, : (M + V_f)
         ] = offspring_chromosome_f[:, : (M + V_f)]
 
-        merge_f = intermediate_chromosome_f.copy()
+        # print("Intermediate chromosome_f BEFORE non-dominated sorting:")
+        # print(intermediate_chromosome_f)
 
-        # --- Non-dominated sorting on intermediate population ---
-        intermediate_chromosome_f = non_domination_sort_mod(
-            intermediate_chromosome_f, M, V_f
+        # --- Build combined featIdx (parents + offspring) ---
+        featIdx_par = np.asarray(featIdx, dtype=float)
+        featIdx_off = np.asarray(featIdx_f, dtype=float)
+        temp_featidx = np.vstack([featIdx_par, featIdx_off])
+
+        # --- Single non-dominated sorting for both chromosome & featIdx ---
+        intermediate_chromosome_f, temp_featidx_sorted = non_domination_sort_mod(
+            intermediate_chromosome_f, M, V_f, temp_featidx
         )
+        # print("Intermediate chromosome_f AFTER non-dominated sorting:")
+        # print(intermediate_chromosome_f)
+        # print("Intermediate featIdx AFTER non-dominated sorting:")
+        # print(temp_featidx_sorted)
 
-        # --- Build intermediate featIdx population ---
-        featIdx = np.asarray(featIdx, dtype=float)
-        featIdx_f = np.asarray(featIdx_f, dtype=float)
-
-        temp_featidx = np.vstack([featIdx, featIdx_f])
-
-        temp_NDsort = merge_f[:, V_f : V_f + M]
-
-        intermediate_featIdx = np.hstack([temp_featidx, temp_NDsort])
-
-        intermediate_featIdx = non_domination_sort_mod(
-            intermediate_featIdx, M, GG.featNum
-        )
-
-        # --- Parent population in "feature space" (featIdx + objectives) ---
+        # --- Parent population in "feature space" (featIdx + objectives + rank + dist) ---
         parentPop = np.hstack(
-            [featIdx, chromosome_f[:, V_f : V_f + M]]
-        )  # shape (pop, featNum + M)
+            [
+                featIdx_par.astype(float),
+                chromosome_f[:, V_f : V_f + M + 2],  # objectives + rank + crowding
+            ]
+        )  # shape (pop, featNum + M + 2)
+        # print("ParentPop (features + objs + rank + dist):")
+        # print(parentPop)
 
-        mask_rank1 = parentPop[:, -2] == 1
-
+        mask_rank1 = parentPop[:, -2] == 1  # rank == 1
         t = np.abs(parentPop[mask_rank1, GG.featNum]).ravel()
 
         if t.size > archivePop:
@@ -144,19 +158,22 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
             arChive = np.vstack([arChive, tmpArc])
 
         tempkGenArchive = disEva(tmpArc != 0)
-
         tempkGenArchive = np.asarray(tempkGenArchive).ravel()
         if kGenWeiArchive.size == 0:
             kGenWeiArchive = tempkGenArchive.copy()
         else:
             kGenWeiArchive = np.concatenate([kGenWeiArchive, tempkGenArchive])
 
-        featIdx_new = replace_chromosome(intermediate_featIdx, M, GG.featNum, pop)
+        # --- Environmental selection (NSGA-II) ---
+        chromosome_f, featIdx = replace_chromosome(
+            intermediate_chromosome_f, M, V_f, pop, featIdx=temp_featidx_sorted
+        )
+        featIdx = (featIdx != 0)
+        # print("Selected chromosome_f for next generation:")
+        # print(chromosome_f)
+        # print(featIdx)
 
-        featIdx = (np.asarray(featIdx_new)[:, :GG.featNum] != 0)
-
-        chromosome_f = replace_chromosome(intermediate_chromosome_f, M, V_f, pop)
-
+        # --- Adaptive weight sharing ---
         leapGen = 1
         gapGen = GG.GAPGEN
 
@@ -177,7 +194,10 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
             kGenAccArchive = np.array([])
             arChive = np.empty((0, GG.featNum))
 
-    chromosome_f2s = np.hstack([featIdx.astype(float), chromosome_f[:, V_f : V_f + M]])
+    # ----- Output: [featIdx, objectives] -----
+    chromosome_f2s = np.hstack(
+        [featIdx.astype(float), chromosome_f[:, V_f : V_f + M]]
+    )
 
     chromosome_output = chromosome_f2s
     return chromosome_output

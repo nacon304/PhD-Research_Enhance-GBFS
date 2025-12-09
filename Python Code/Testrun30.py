@@ -8,7 +8,7 @@ def main():
     os.makedirs(mat_dir, exist_ok=True)
 
     # for i in range(1, 15):
-    for i in range(11, 12):
+    for i in range(6, 7):
         PP, datasetname = runn(i)
 
         rows_main = PP[:-2]

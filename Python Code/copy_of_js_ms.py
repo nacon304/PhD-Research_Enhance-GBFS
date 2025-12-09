@@ -7,6 +7,8 @@ from myinputdatasetXD import myinputdatasetXD
 from fisherScore import fisherScore
 from newtry_ms import newtry_ms
 
+from sklearn.model_selection import StratifiedShuffleSplit
+
 import gbfs_globals as GG
 
 def _mapminmax_zero_one(X):
@@ -72,20 +74,40 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
 
         tic = perf_counter()
 
-        # Random train/test split 70/30
-        perm = np.random.permutation(row)
-        n_train = int(round(row * 0.7))
-        train_idx = perm[:n_train]
+        # # Random train/test split 70/30
+        # perm = np.random.permutation(row)
+        # n_train = int(round(row * 0.7))
+        # train_idx = perm[:n_train]
 
-        trIdx_arr = np.zeros(row, dtype=bool)
-        trIdx_arr[train_idx] = True
-        teIdx_arr = ~trIdx_arr
-        GG.trIdx = trIdx_arr
+        # trIdx_arr = np.zeros(row, dtype=bool)
+        # trIdx_arr[train_idx] = True
+        # teIdx_arr = ~trIdx_arr
+        # GG.trIdx = trIdx_arr
 
-        GG.trData = zData[trIdx_arr, :]
-        GG.trLabel = GG.label[trIdx_arr]
-        GG.teData = zData[teIdx_arr, :]
-        GG.teLabel = GG.label[teIdx_arr]
+        # GG.trData = zData[trIdx_arr, :]
+        # GG.trLabel = GG.label[trIdx_arr]
+        # GG.teData = zData[teIdx_arr, :]
+        # GG.teLabel = GG.label[teIdx_arr]
+
+        # ===== Stratified train/test split 70/30 =====
+        sss = StratifiedShuffleSplit(
+            n_splits=1,
+            test_size=0.3,
+            random_state=Rtimes   # mỗi RUN random khác nhau
+        )
+
+        # label là vector nhãn của toàn bộ dữ liệu
+        for train_index, test_index in sss.split(zData, GG.label):
+            GG.trIdx = np.zeros(row, dtype=bool)
+            GG.trIdx[train_index] = True
+
+            trIdx_arr = GG.trIdx
+            teIdx_arr = ~trIdx_arr
+
+            GG.trData = zData[trIdx_arr, :]
+            GG.trLabel = GG.label[trIdx_arr]
+            GG.teData = zData[teIdx_arr, :]
+            GG.teLabel = GG.label[teIdx_arr]
 
         _, vWeight0 = fisherScore(GG.trData, GG.trLabel)
         GG.vWeight = 1.0 + _mapminmax_zero_one(vWeight0.reshape(-1, 1)).ravel()
@@ -114,7 +136,7 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
         kNeiAdj = squareform(GG.kNeiZout, force='tovector', checks=False)
 
         # ====== Feature selection algorithm ======
-        featIdx = newtry_ms(kNeiAdj, 20, 50)
+        featIdx, _, _ = newtry_ms(kNeiAdj, 20, 50)
         featIdx = np.asarray(featIdx)
         selected_features = np.where(featIdx != 0)[0]
         selected_num = selected_features.size

@@ -15,12 +15,12 @@ from myinputdatasetXD import myinputdatasetXD
 from fisherScore import fisherScore
 from newtry_ms import newtry_ms
 import gbfs_globals as GG
+from sklearn.model_selection import StratifiedShuffleSplit
 
 from traditional_fs import (
     run_all_filters,
     run_embedded_methods,
     run_wrapper_methods,
-    evaluate_with_knn_holdout,
 )
 
 from graph_fs import (
@@ -98,6 +98,46 @@ def hypervolume_min2d(fr, er, ref=(1.0, 1.0)):
     ys = np.clip(ref[1] - er, 0, None)
 
     return _hv_max2d(xs, ys)
+
+def filter_nondominated_min(fr, er):
+    """
+    Keep only non-dominated points for 2D minimization:
+    objectives = (fr, er).
+
+    Returns:
+        fr_nd, er_nd  (both sorted by fr ascending)
+    """
+    fr = np.asarray(fr, float)
+    er = np.asarray(er, float)
+
+    pts = np.column_stack([fr, er])
+    n = len(pts)
+    if n == 0:
+        return fr, er
+
+    keep = np.ones(n, dtype=bool)
+
+    for i in range(n):
+        if not keep[i]:
+            continue
+        for j in range(n):
+            if i == j or not keep[j]:
+                continue
+            # j dominates i in minimization?
+            if (pts[j, 0] <= pts[i, 0] and pts[j, 1] <= pts[i, 1] and
+                (pts[j, 0] < pts[i, 0] or pts[j, 1] < pts[i, 1])):
+                keep[i] = False
+                break
+
+    pts_nd = pts[keep]
+    if pts_nd.size == 0:
+        return np.array([], float), np.array([], float)
+
+    # sort by fr ascending for nicer plotting
+    order = np.argsort(pts_nd[:, 0])
+    pts_nd = pts_nd[order]
+
+    return pts_nd[:, 0], pts_nd[:, 1]
 
 # =====================================================
 # 1. GBFS on one split + build Pareto front (fRatio, eRate)
@@ -304,7 +344,6 @@ def run_gbfs_on_split(
 
 RATIOS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
-
 def build_fronts_from_scores(scores_dict, X_train, y_train, X_test, y_test):
     """
     scores_dict: dict[name] -> score vector (n_features,)
@@ -345,7 +384,6 @@ def build_fronts_from_scores(scores_dict, X_train, y_train, X_test, y_test):
 
     return fronts
 
-
 # =====================================================
 # 3. Compare fronts: Traditional curves vs GBFS Pareto (1 split)
 # =====================================================
@@ -372,474 +410,6 @@ def build_fronts_from_wrapper_methods(X_train, X_test, y_train, y_test, cv=5):
             fronts[name][1].append(1.0 - acc)                        # eRate
     return fronts
 
-def compare_fronts_single_split(
-    data_index=1,
-    delt=10.0,
-    omega=0.8,
-    kNeigh=5,
-):
-    # --- Load data ---
-    dataset, labels, datasetName = myinputdatasetXD(data_index)
-    X_raw = dataset[:, 1:].astype(float)
-    y = np.asarray(labels, dtype=int).ravel()
-
-    n_samples, n_features = X_raw.shape
-    print(f"Dataset: {datasetName}")
-    print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
-
-    # --- split 70/30: for both traditional + GBFS ---
-    rng = np.random.default_rng(42)
-    perm = rng.permutation(n_samples)
-    n_train = int(round(0.7 * n_samples))
-    train_idx = perm[:n_train]
-
-    tr_mask = np.zeros(n_samples, dtype=bool)
-    tr_mask[train_idx] = True
-
-    X_train_raw = X_raw[tr_mask, :]
-    X_test_raw  = X_raw[~tr_mask, :]
-    y_train     = y[tr_mask]
-    y_test      = y[~tr_mask]
-
-    # --- Baseline ALL features ---
-    scaler_all = StandardScaler()
-    Xtr_all = scaler_all.fit_transform(X_train_raw)
-    Xte_all = scaler_all.transform(X_test_raw)
-
-    clf_all = KNeighborsClassifier(n_neighbors=5)
-    clf_all.fit(Xtr_all, y_train)
-    y_pred_all = clf_all.predict(Xte_all)
-    acc_all = accuracy_score(y_test, y_pred_all)
-    print(f"[BASELINE] ALL features acc = {acc_all:.4f}")
-
-    # =============================
-    # 1) Traditional FS: get scores (ranking)
-    # =============================
-    f_scores, _ = run_all_filters(Xtr_all, y_train, k=n_features)
-    e_scores, _ = run_embedded_methods(Xtr_all, y_train, k=n_features)
-    # w_fronts = build_fronts_from_wrapper_methods(Xtr_all, Xte_all, y_train, y_test, cv=3)
-
-    all_scores = {}
-    all_scores.update(f_scores)
-    all_scores.update(e_scores)
-    # (if you want to add wrapper curves, you need to write separately,
-    #  because RFE/SFS do not provide scores for all features.)
-    # Build front (fRatio, eRate) for each traditional method
-    trad_fronts = build_fronts_from_scores(
-        all_scores, Xtr_all, y_train, Xte_all, y_test
-    )
-    # trad_fronts.update(w_fronts)
-
-    # =============================
-    # 2) GBFS: best + Pareto front (on the same split)
-    # =============================
-    gb_best, gb_front = run_gbfs_on_split(
-        X_raw, y, tr_mask,
-        delt=delt,
-        omega=omega,
-        kNeigh=kNeigh,
-        pop=20,
-        times=50,
-    )
-
-    print(f"[GBFS] best acc = {gb_best['acc']:.4f}, "
-          f"#feat = {gb_best['fnum']}")
-
-    # =============================
-    # 3) Plot: Traditional curves vs GBFS front
-    # =============================
-    plt.figure(figsize=(6, 5))
-
-    # Traditional: plot curves
-    for name, (fr, er) in trad_fronts.items():
-        plt.plot(fr, er, marker="o", linewidth=1, markersize=3, label=name)
-
-    # GBFS: plot all Pareto solutions (if any)
-    fr_gb = gb_front["fRatio"]
-    er_gb = gb_front["eRate"]
-    if fr_gb.size > 0:
-        # plt.scatter(fr_gb, er_gb, s=50, marker="*", label="GBFS Pareto")
-        plt.plot(
-            fr_gb, er_gb, marker="*", linewidth=1,
-            markersize=4, label="GBFS Pareto"
-        )
-
-    # Add baseline ALL features (1 point)
-    plt.scatter(
-        [1.0], [1.0 - acc_all],
-        s=60, marker="s", label="ALL features"
-    )
-
-    plt.xlabel("fRatio = #selected features / #total features")
-    plt.ylabel("eRate = 1 - accuracy (KNN)")
-    plt.title(f"Front comparison on {datasetName} (single 70/30 split)")
-    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
-    plt.legend(fontsize=8)
-    plt.tight_layout()
-    plt.show()
-
-    return trad_fronts, gb_front, gb_best
-
-# =====================================================
-# 3b. Multi-run: select median HV front for each method
-# =====================================================
-
-# def compare_fronts_median_hv(
-#     data_index=1,
-#     delt=10.0,
-#     omega=0.8,
-#     kNeigh=5,
-#     runs=5,
-#     hv_ref=(1.0, 1.0),
-# ):
-#     # --- Load data ---
-#     dataset, labels, datasetName = myinputdatasetXD(data_index)
-#     X_raw = dataset[:, 1:].astype(float)
-#     y = np.asarray(labels, dtype=int).ravel()
-
-#     n_samples, n_features = X_raw.shape
-#     print(f"Dataset: {datasetName}")
-#     print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
-
-#     # --- fixed 70/30 split for all runs ---
-#     rng = np.random.default_rng(42)
-#     perm = rng.permutation(n_samples)
-#     n_train = int(round(0.7 * n_samples))
-#     train_idx = perm[:n_train]
-
-#     tr_mask = np.zeros(n_samples, dtype=bool)
-#     tr_mask[train_idx] = True
-
-#     X_train_raw = X_raw[tr_mask, :]
-#     X_test_raw  = X_raw[~tr_mask, :]
-#     y_train     = y[tr_mask]
-#     y_test      = y[~tr_mask]
-
-#     # --- Baseline ALL features ---
-#     scaler_all = StandardScaler()
-#     Xtr_all = scaler_all.fit_transform(X_train_raw)
-#     Xte_all = scaler_all.transform(X_test_raw)
-
-#     clf_all = KNeighborsClassifier(n_neighbors=5)
-#     clf_all.fit(Xtr_all, y_train)
-#     y_pred_all = clf_all.predict(Xte_all)
-#     acc_all = accuracy_score(y_test, y_pred_all)
-#     print(f"[BASELINE] ALL features acc = {acc_all:.4f}")
-
-#     # Prepare structures to store fronts per RUN
-#     trad_fronts_runs = []   # list[ dict[name] -> (fr, er) ]
-#     gb_fronts_runs   = []   # list[ dict("fRatio","eRate") ]
-
-#     # =============================
-#     # Multi-run
-#     # =============================
-#     for r in range(runs):
-#         print(f"\n========== FRONT RUN {r+1}/{runs} ==========")
-
-#         # 1) Traditional FS: get scores + build fronts
-#         f_scores, _ = run_all_filters(Xtr_all, y_train, k=n_features)
-#         e_scores, _ = run_embedded_methods(Xtr_all, y_train, k=n_features)
-#         w_fronts = build_fronts_from_wrapper_methods(Xtr_all, Xte_all, y_train, y_test, cv=3)
-
-#         all_scores = {}
-#         all_scores.update(f_scores)
-#         all_scores.update(e_scores)
-
-#         trad_fronts_r = build_fronts_from_scores(
-#             all_scores, Xtr_all, y_train, Xte_all, y_test
-#         )
-#         trad_fronts_r.update(w_fronts)
-#         trad_fronts_runs.append(trad_fronts_r)
-
-#         # 2) GBFS on the same split
-#         gb_best_r, gb_front_r = run_gbfs_on_split(
-#             X_raw, y, tr_mask,
-#             delt=delt,
-#             omega=omega,
-#             kNeigh=kNeigh,
-#             pop=20,
-#             times=50,
-#         )
-
-#         print(f"[GBFS run {r+1}] acc = {gb_best_r['acc']:.4f}, "
-#               f"#feat = {gb_best_r['fnum']}")
-
-#         gb_fronts_runs.append(gb_front_r)
-
-#     # =============================
-#     # Calculate hypervolume for each method on each run
-#     # =============================
-#     # Get list of traditional method names from the first run
-#     method_names = list(trad_fronts_runs[0].keys())
-
-#     hv_trad = {name: [] for name in method_names}
-#     hv_gb   = []
-
-#     # HV traditional
-#     for r in range(runs):
-#         fronts_r = trad_fronts_runs[r]
-#         for name in method_names:
-#             fr, er = fronts_r[name]
-#             hv_val = hypervolume_min2d(fr, er, ref=hv_ref)
-#             hv_trad[name].append(hv_val)
-
-#     # HV GBFS
-#     for r in range(runs):
-#         fr_gb = gb_fronts_runs[r]["fRatio"]
-#         er_gb = gb_fronts_runs[r]["eRate"]
-#         if fr_gb.size > 0:
-#             hv_val = hypervolume_min2d(fr_gb, er_gb, ref=hv_ref)
-#         else:
-#             hv_val = 0.0
-#         hv_gb.append(hv_val)
-
-#     # Convert to np.array
-#     for name in hv_trad:
-#         hv_trad[name] = np.asarray(hv_trad[name], float)
-#     hv_gb = np.asarray(hv_gb, float)
-
-#     # =============================
-#     # Select median HV front for each method
-#     # =============================
-#     median_trad_fronts = {}
-
-#     for name in method_names:
-#         hv_arr = hv_trad[name]
-#         median_val = np.median(hv_arr)
-#         idx = int(np.argsort(np.abs(hv_arr - median_val))[0])
-#         median_trad_fronts[name] = trad_fronts_runs[idx][name]
-#         print(f"[TRAD {name}] median HV = {median_val:.6f}, "
-#               f"chọn run {idx+1} (HV = {hv_arr[idx]:.6f})")
-
-#     # GBFS
-#     if hv_gb.size > 0:
-#         median_gb = np.median(hv_gb)
-#         idx_gb = int(np.argsort(np.abs(hv_gb - median_gb))[0])
-#         median_gb_front = gb_fronts_runs[idx_gb]
-#         print(f"[GBFS] median HV = {median_gb:.6f}, "
-#               f"chọn run {idx_gb+1} (HV = {hv_gb[idx_gb]:.6f})")
-#     else:
-#         median_gb_front = {"fRatio": np.array([]), "eRate": np.array([])}
-#         idx_gb = -1
-#         median_gb = 0.0
-
-#     # =============================
-#     # Plot: use median HV front of EACH method
-#     # =============================
-#     plt.figure(figsize=(6, 5))
-
-#     # Traditional: plot median curves
-#     for name, (fr, er) in median_trad_fronts.items():
-#         plt.plot(fr, er, marker="o", linewidth=1, markersize=3, label=name)
-
-#     # GBFS: plot median HV front, connect into a line
-#     fr_gb = median_gb_front["fRatio"]
-#     er_gb = median_gb_front["eRate"]
-#     if fr_gb.size > 0:
-#         order = np.argsort(fr_gb)
-#         plt.plot(
-#             fr_gb[order],
-#             er_gb[order],
-#             marker="*",
-#             linestyle="-",
-#             linewidth=1.5,
-#             markersize=6,
-#             label=f"GBFS Pareto (median HV)",
-#         )
-
-#     # Baseline ALL features (1 point)
-#     plt.scatter(
-#         [1.0], [1.0 - acc_all],
-#         s=60, marker="s", label="ALL features"
-#     )
-
-#     plt.xlabel("fRatio = #selected features / #total features")
-#     plt.ylabel("eRate = 1 - accuracy (KNN)")
-#     plt.title(
-#         f"Median-HV fronts on {datasetName} "
-#         f"(single 70/30 split, {runs} runs per method)"
-#     )
-#     plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
-#     plt.legend(fontsize=8)
-#     plt.tight_layout()
-#     plt.show()
-
-#     return median_trad_fronts, median_gb_front, hv_trad, hv_gb
-
-# =====================================================
-# 4. (Optional) Old multi-run function: use GBFS best (no front needed)
-# =====================================================
-
-def generate_splits(n_samples, runs=20, train_ratio=0.7, random_state=42):
-    """
-    Generate list of bool masks for RUNS times random 70/30 splits.
-    Shared for GBFS + all traditional FS.
-    """
-    rng = np.random.default_rng(random_state)
-    splits = []
-    n_train = int(round(train_ratio * n_samples))
-
-    for _ in range(runs):
-        perm = rng.permutation(n_samples)
-        train_idx = perm[:n_train]
-        tr_mask = np.zeros(n_samples, dtype=bool)
-        tr_mask[train_idx] = True
-        splits.append(tr_mask)
-
-    return splits
-
-
-# def compare_gbfs_vs_traditional(
-#     data_index=2,
-#     runs=20,
-#     delt=10.0,
-#     omega=0.8,
-#     kNeigh=5,
-#     max_k_fs=None,
-# ):
-#     """
-#     Multi-run function to compare mean±std accuracy, without using fronts.
-#     """
-#     # --- Load data ---
-#     dataset, labels, datasetName = myinputdatasetXD(data_index)
-#     X_raw = dataset[:, 1:].astype(float)
-#     y = np.asarray(labels, dtype=int).ravel()
-
-#     n_samples, n_features = X_raw.shape
-#     print(f"Dataset: {datasetName}")
-#     print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
-
-#     if max_k_fs is None:
-#         max_k_fs = min(20, max(1, n_features // 2))  # avoid > #features
-
-#     # --- Generate common 70/30 splits ---
-#     splits = generate_splits(n_samples, runs=runs, train_ratio=0.7, random_state=42)
-
-#     # Store results
-#     accs_traditional = {}   # name -> list[acc]
-#     gbfs_accs = []
-#     gbfs_fnums = []
-
-#     for r, tr_mask in enumerate(splits, start=1):
-#         print(f"\n========== RUN {r}/{runs} ==========")
-
-#         X_train_raw = X_raw[tr_mask, :]
-#         X_test_raw  = X_raw[~tr_mask, :]
-#         y_train     = y[tr_mask]
-#         y_test      = y[~tr_mask]
-
-#         # --- Baseline KNN with ALL features on this split ---
-#         scaler_all = StandardScaler()
-#         X_train_all = scaler_all.fit_transform(X_train_raw)
-#         X_test_all  = scaler_all.transform(X_test_raw)
-
-#         clf_all = KNeighborsClassifier(n_neighbors=5)
-#         clf_all.fit(X_train_all, y_train)
-#         y_pred_all = clf_all.predict(X_test_all)
-#         acc_all = accuracy_score(y_test, y_pred_all)
-#         print(f"[RUN {r}] Baseline ALL features acc = {acc_all:.4f}")
-
-#         # =============================
-#         # 1) Traditional Feature Selection
-#         # =============================
-#         f_scores, f_selected = run_all_filters(X_train_raw, y_train, k=max_k_fs)
-#         e_scores, e_selected = run_embedded_methods(X_train_raw, y_train, k=max_k_fs)
-#         w_selected = run_wrapper_methods(X_train_raw, y_train, k=max_k_fs, cv=5)
-
-#         # Combine all subsets
-#         all_selected = {}
-#         all_selected.update(f_selected)
-#         all_selected.update(e_selected)
-#         all_selected.update(w_selected)
-#         all_selected["ALL_features"] = np.arange(n_features)
-
-#         # Evaluate on the same split
-#         accs = evaluate_with_knn_holdout(
-#             X_train_raw, y_train,
-#             X_test_raw,  y_test,
-#             all_selected,
-#             n_neighbors=5,
-#         )
-#         # ALL_features uses baseline acc_all to ensure consistency
-#         accs["ALL_features"] = acc_all
-
-#         # Store acc for each method
-#         for name, acc in accs.items():
-#             accs_traditional.setdefault(name, []).append(acc)
-
-#         # =============================
-#         # 2) GBFS on the same split
-#         # =============================
-#         gb_result, _ = run_gbfs_on_split(
-#             X_raw, y, tr_mask,
-#             delt=delt,
-#             omega=omega,
-#             kNeigh=kNeigh,
-#             pop=20,
-#             times=50,
-#         )
-#         gbfs_accs.append(gb_result["acc"])
-#         gbfs_fnums.append(gb_result["fnum"])
-
-#         print(f"[RUN {r}] GBFS acc = {gb_result['acc']:.4f}, "
-#               f"#feat = {gb_result['fnum']}")
-
-#     # =============================
-#     # Calculate mean / std for each method
-#     # =============================
-#     summary = []
-
-#     # Traditional
-#     for name, arr in accs_traditional.items():
-#         arr = np.asarray(arr, dtype=float)
-#         mean_acc = arr.mean()
-#         std_acc  = arr.std()
-
-#         if name == "ALL_features":
-#             fnum = n_features
-#         else:
-#             fnum = max_k_fs
-
-#         fRatio = fnum / n_features
-#         eRate  = 1.0 - mean_acc
-
-#         summary.append({
-#             "method": name,
-#             "mean_acc": mean_acc,
-#             "std_acc": std_acc,
-#             "num_features": fnum,
-#             "fRatio": fRatio,
-#             "eRate": eRate,
-#         })
-
-#     # GBFS
-#     gbfs_accs = np.asarray(gbfs_accs, dtype=float)
-#     gbfs_fnums = np.asarray(gbfs_fnums, dtype=float)
-#     gb_fmean = gbfs_fnums.mean() if gbfs_fnums.size > 0 else 0.0
-
-#     gb_summary = {
-#         "method": "GBFS",
-#         "mean_acc": gbfs_accs.mean() if gbfs_accs.size > 0 else 0.0,
-#         "std_acc": gbfs_accs.std() if gbfs_accs.size > 0 else 0.0,
-#         "num_features": gb_fmean,
-#         "fRatio": gb_fmean / n_features if n_features > 0 else 0.0,
-#         "eRate": 1.0 - (gbfs_accs.mean() if gbfs_accs.size > 0 else 0.0),
-#     }
-#     summary.append(gb_summary)
-
-#     summary = sorted(summary, key=lambda d: -d["mean_acc"])
-
-#     print("\n===== SUMMARY (mean ± std acc, #feat) =====")
-#     for s in summary:
-#         print(f"{s['method']:18s}: "
-#               f"acc = {s['mean_acc']:.4f} ± {s['std_acc']:.4f}, "
-#               f"#feat ≈ {s['num_features']:.1f} "
-#               f"(fRatio = {s['fRatio']:.3f}, eRate = {s['eRate']:.3f})")
-
-#     # (bar/scatter plots remain unchanged if you still need them)
-
-#     return summary
-
 def compare_fronts_median_hv(
     data_index=1,
     delt=10.0,
@@ -858,13 +428,14 @@ def compare_fronts_median_hv(
     print(f"X shape = {X_raw.shape}, y shape = {y.shape}")
 
     # --- fixed 70/30 split for all runs ---
-    rng = np.random.default_rng(42)
-    perm = rng.permutation(n_samples)
-    n_train = int(round(0.7 * n_samples))
-    train_idx = perm[:n_train]
-
-    tr_mask = np.zeros(n_samples, dtype=bool)
-    tr_mask[train_idx] = True
+    sss = StratifiedShuffleSplit(
+        n_splits=1,
+        test_size=0.3,
+        random_state=42
+    )
+    for train_idx, test_idx in sss.split(X_raw, y):
+        tr_mask = np.zeros(n_samples, dtype=bool)
+        tr_mask[train_idx] = True
 
     X_train_raw = X_raw[tr_mask, :]
     X_test_raw  = X_raw[~tr_mask, :]
@@ -996,15 +567,32 @@ def compare_fronts_median_hv(
     for name, hv_arr in hv_trad.items():
         median_val = np.median(hv_arr)
         idx = int(np.argsort(np.abs(hv_arr - median_val))[0])
-        median_trad_fronts[name] = trad_fronts_runs[idx][name]
+        
+        # get the original front for the chosen run
+        fr, er = trad_fronts_runs[idx][name]
+
+        # keep only non-dominated points (minimization)
+        fr_nd, er_nd = filter_nondominated_min(fr, er)
+        median_trad_fronts[name] = (fr_nd, er_nd)
+
         print(f"[TRAD {name}] median HV = {median_val:.6f}, "
-              f"choose run {idx+1} (HV = {hv_arr[idx]:.6f})")
+            f"choose run {idx+1} (HV = {hv_arr[idx]:.6f})")
 
     # GBFS
     if hv_gb.size > 0:
         median_gb = np.median(hv_gb)
         idx_gb = int(np.argsort(np.abs(hv_gb - median_gb))[0])
         median_gb_front = gb_fronts_runs[idx_gb]
+
+        # filter non-dominated points for GBFS front
+        fr_gb = median_gb_front["fRatio"]
+        er_gb = median_gb_front["eRate"]
+        fr_gb_nd, er_gb_nd = filter_nondominated_min(fr_gb, er_gb)
+        median_gb_front = {
+            "fRatio": fr_gb_nd,
+            "eRate": er_gb_nd,
+        }
+
         print(f"[GBFS] median HV = {median_gb:.6f}, "
               f"choose run {idx_gb+1} (HV = {hv_gb[idx_gb]:.6f})")
     else:
@@ -1108,19 +696,11 @@ def compare_fronts_median_hv(
 
     return median_trad_fronts, median_gb_front, hv_trad, hv_gb, summary
 
-
 # =====================================================
 # 5. Main
 # =====================================================
 
 if __name__ == "__main__":
-    # trad_fronts, gb_front, gb_best = compare_fronts_single_split(
-    #     data_index=1,
-    #     delt=10.0,
-    #     omega=0.8,
-    #     kNeigh=5,
-    # )
-
     median_trad_fronts, median_gb_front, hv_trad, hv_gb, summary = compare_fronts_median_hv(
         data_index=2,
         delt=10.0,
@@ -1129,12 +709,3 @@ if __name__ == "__main__":
         runs=5,
         hv_ref=(1.0, 1.0),
     )
-
-    # summary = compare_gbfs_vs_traditional(
-    #     data_index=1,
-    #     runs=5,
-    #     delt=10.0,
-    #     omega=0.8,
-    #     kNeigh=5,
-    #     max_k_fs=None,
-    # )

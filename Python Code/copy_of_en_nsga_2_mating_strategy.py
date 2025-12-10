@@ -76,6 +76,7 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
     archivePop = pop
 
     for i in range(1, gen + 1):
+    # for i in range(1, 2):
         # print(f"\n=== Generation {i} ===")
 
         # --- Parent selection ---

@@ -4,12 +4,12 @@ from runn import runn
 import gbfs_globals as GG
 
 def main():
-    mat_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Result"
-    GG.visual_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Visualize"
+    mat_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Result Implementation 1"
+    GG.visual_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Visualize Implementation 1"
     os.makedirs(mat_dir, exist_ok=True)
 
     # for i in range(1, 15):
-    for i in range(1, 2):
+    for i in range(1, 5):
         PP, datasetname = runn(i)
 
         rows_main = PP[:-2]

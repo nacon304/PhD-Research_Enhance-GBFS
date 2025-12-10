@@ -3,6 +3,8 @@ GAPGEN = 5
 DELT = None
 OMEGA = None
 
+RUNS = 30
+
 data = None
 label = None
 
@@ -30,6 +32,9 @@ visual_dir = None
 current_run = None
 run_logs = {}
 M = 2
+
+acc_single = None
+C_matrix = None
 
 TTT = []
 TTTT = []

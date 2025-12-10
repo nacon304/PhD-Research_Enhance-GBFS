@@ -291,7 +291,6 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
         "acc_S4": float(ACC_S4.std()),
         "fnum_S4": float(FNUM_S4.std()),
     })
-    print(seq_rows)
     df_seq = pd.DataFrame(seq_rows)
     seq_summary_path = os.path.join(output_dir, "sequential_summary.csv")
     df_seq.to_csv(seq_summary_path, index=False)

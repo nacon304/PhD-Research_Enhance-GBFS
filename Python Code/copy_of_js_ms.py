@@ -93,10 +93,9 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
         sss = StratifiedShuffleSplit(
             n_splits=1,
             test_size=0.3,
-            random_state=Rtimes   # mỗi RUN random khác nhau
+            random_state=42
         )
 
-        # label là vector nhãn của toàn bộ dữ liệu
         for train_index, test_index in sss.split(zData, GG.label):
             GG.trIdx = np.zeros(row, dtype=bool)
             GG.trIdx[train_index] = True

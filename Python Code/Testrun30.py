@@ -1,10 +1,11 @@
 import os
 from scipy.io import savemat
 from runn import runn
-
+import gbfs_globals as GG
 
 def main():
     mat_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Result"
+    GG.visual_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Visualize"
     os.makedirs(mat_dir, exist_ok=True)
 
     # for i in range(1, 15):
@@ -12,13 +13,13 @@ def main():
         PP, datasetname = runn(i)
 
         rows_main = PP[:-2]
-        ACC = [[row[0], row[1], row[3]] for row in rows_main]
+        ACC = [[row[0], row[1], row[3], row[4]] for row in rows_main]
 
         row_m = PP[-2]
-        ACC_m = [row_m[0], row_m[1], row_m[3]]
+        ACC_m = [row_m[0], row_m[1], row_m[3], row_m[4]]
 
         row_s = PP[-1]
-        ACC_s = [row_s[0], row_s[1], row_s[3]]
+        ACC_s = [row_s[0], row_s[1], row_s[3], row_s[4]]
 
         selectfeat = [row[2] for row in PP]
 

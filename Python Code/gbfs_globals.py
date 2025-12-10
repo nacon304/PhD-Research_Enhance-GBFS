@@ -26,5 +26,10 @@ teLabel = None
 assiNumInside = []
 Weight = None
 
+visual_dir = None
+current_run = None
+run_logs = {}
+M = 2
+
 TTT = []
 TTTT = []

@@ -23,6 +23,8 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
         Adjacency template.
     V_f : int
         Length of decision-variable part for feature-side (V_f).
+    run_dir : str, optional
+        Directory to save run-specific files.
 
     Returns
     -------
@@ -49,7 +51,7 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
     if gen < 5:
         raise ValueError("Minimum number of generations is 5")
 
-    M = 2  # number of objectives
+    M = GG.M  # number of objectives
 
     # ----- Initialize population (feature-side) -----
     chromosome_f, featIdx = initialize_variables_f(pop, M, V_f, templateAdj)
@@ -58,15 +60,10 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
     # print("Initial featIdx:")
     # print(featIdx)
 
-    print(GG.Zout)
-    print(GG.kNeiMatrix)
-    print(GG.kNeiZout)
-
-
-
     # Sort initial population by non-domination (sync chromosome_f & featIdx)
     chromosome_f, featIdx = non_domination_sort_mod(chromosome_f, M, V_f, featIdx)
     save_pareto_front_csv(chromosome_f, 0, V_f, run_dir)
+    log_population_metrics(chromosome_f, 0, V_f, run_dir)
     # print("After initial non-dominated sorting:")
     # print(chromosome_f)
     # print(featIdx)
@@ -177,6 +174,8 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
             intermediate_chromosome_f, M, V_f, pop, featIdx=temp_featidx_sorted
         )
         featIdx = (featIdx != 0)
+        save_pareto_front_csv(chromosome_f, i, V_f, run_dir)
+        log_population_metrics(chromosome_f, i, V_f, run_dir)
         # print("Selected chromosome_f for next generation:")
         # print(chromosome_f)
         # print(featIdx)
@@ -204,7 +203,7 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
 
     # ----- Output: [featIdx, objectives] -----
     chromosome_f2s = np.hstack(
-        [featIdx.astype(float), chromosome_f[:, V_f : V_f + M]]
+        [featIdx.astype(float), chromosome_f[:, : V_f + M]]
     )
 
     chromosome_output = chromosome_f2s

@@ -24,7 +24,7 @@ def runn(data_idx):
     os.makedirs(pf_dir, exist_ok=True)
 
     DELT = 0.2
-    RUNS = 1
+    RUNS = 30
 
     # Regularize data_idx
     if isinstance(data_idx, (int, float)):
@@ -59,8 +59,8 @@ def runn(data_idx):
 
     last_two_p = p[-2:]
     P[(idx - 1) * 2 : idx * 2] = [
-        [last_two_p[0][0], last_two_p[0][1], last_two_p[0][3]],
-        [last_two_p[1][0], last_two_p[1][1], last_two_p[1][3]],
+        [last_two_p[0][0], last_two_p[0][1], last_two_p[0][4]],
+        [last_two_p[1][0], last_two_p[1][1], last_two_p[1][4]],
     ]
 
     time_stats[list_pos] = [T[-2][0], T[-1][0]]

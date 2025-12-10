@@ -2,6 +2,9 @@ import numpy as np
 import gbfs_globals as GG
 import pandas as pd
 import os
+import numpy as np
+import matplotlib.pyplot as plt
+import networkx as nx
 
 def _mapminmax_zero_one(X):
     """
@@ -65,7 +68,6 @@ def save_pareto_front_csv(chromosome_f, i, V_f, run_dir):
     """
     if run_dir is None:
         return
-
     csv_file_name = f"{run_dir}/gen_{i:03d}.csv"
 
     ranks = chromosome_f[:, V_f + GG.M].astype(int)
@@ -135,3 +137,108 @@ def log_population_metrics(chromosome_f, i, V_f, run_dir):
     # else:
     #     df = pd.DataFrame([row])
     #     df.to_csv(metrics_path, mode="a", header=False, index=False)
+
+def plot_knn_graph_with_selected(kNeiMatrix, edge_mask, selected_features,
+                                 run_dir, run_id=None, filename_prefix="knn_graph"):
+    """
+    Vẽ đồ thị k-NN từ kNeiMatrix và vector bit edge_mask (kNeigh_chosen).
+    Mỗi phần tử edge_mask[t] quyết định có vẽ cạnh (i, j) tương ứng hay không.
+
+    Mapping:
+        n_features, max_k = kNeiMatrix.shape
+        edge_mask size = n_features * max_k
+        flat_index = i * max_k + pos  (pos = 0..max_k-1)
+        j = kNeiMatrix[i, pos]
+
+    Nếu edge_mask[flat_index] == 1 -> add edge (i, j).
+
+    Các feature trong selected_features sẽ được tô đậm hơn.
+    """
+    kNeiMatrix = np.asarray(kNeiMatrix, dtype=int)
+    edge_mask = np.asarray(edge_mask).ravel()
+    selected_features = np.asarray(selected_features, dtype=int)
+
+    n_features, max_k = kNeiMatrix.shape
+    expected_len = n_features * max_k
+    if edge_mask.size != expected_len:
+        raise ValueError(
+            f"edge_mask length {edge_mask.size} != n_features*max_k = {expected_len}"
+        )
+
+    # ---- Xây graph từ bit-mask ----
+    G = nx.Graph()
+    G.add_nodes_from(range(n_features))
+
+    idx = 0
+    for i in range(n_features):
+        for pos in range(max_k):
+            if edge_mask[idx] != 0:
+                j = int(kNeiMatrix[i, pos])
+                if i != j:
+                    G.add_edge(i, j)
+            idx += 1
+
+    # Nếu không có cạnh nào, vẫn vẽ node cho dễ nhìn
+    # ---- Layout ----
+    pos = nx.spring_layout(G, seed=42)
+
+    # ---- Node style: tô đậm node được chọn ----
+    node_colors = []
+    node_sizes = []
+    selected_set = set(selected_features.tolist())
+
+    for node in G.nodes():
+        if node in selected_set:
+            node_colors.append("tab:red")   # feature được chọn
+            node_sizes.append(700)
+        else:
+            node_colors.append("tab:blue")  # feature không được chọn
+            node_sizes.append(300)
+
+    # ---- Edge style: đậm hơn nếu nối giữa 2 selected features ----
+    edge_colors = []
+    edge_widths = []
+    for u, v in G.edges():
+        if u in selected_set and v in selected_set:
+            edge_colors.append("tab:red")
+            edge_widths.append(2.5)
+        elif u in selected_set or v in selected_set:
+            edge_colors.append("tab:orange")
+            edge_widths.append(1.5)
+        else:
+            edge_colors.append("lightgray")
+            edge_widths.append(0.8)
+
+    # ---- Vẽ ----
+    plt.figure(figsize=(6, 6))
+
+    if len(G.edges()) > 0:
+        nx.draw_networkx_edges(G, pos,
+                               edge_color=edge_colors,
+                               width=edge_widths,
+                               alpha=0.8)
+
+    nx.draw_networkx_nodes(
+        G, pos,
+        node_color=node_colors,
+        node_size=node_sizes
+    )
+    nx.draw_networkx_labels(G, pos, font_size=10)
+
+    title = "k-NN Graph (mask-based edges)"
+    if run_id is not None:
+        title += f" - Run {run_id}"
+    plt.title(title)
+    plt.axis("off")
+    plt.tight_layout()
+
+    # ---- Lưu hình ----
+    if run_id is None:
+        fname = f"{filename_prefix}.png"
+    else:
+        fname = f"{filename_prefix}_run{run_id}.png"
+
+    out_path = os.path.join(run_dir, fname)
+    plt.savefig(out_path, dpi=300)
+    plt.close()
+    # print(f"[plot] Saved k-NN graph to: {out_path}")

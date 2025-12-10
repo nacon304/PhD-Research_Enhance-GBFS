@@ -9,6 +9,7 @@ from replace_chromosome import replace_chromosome
 from toChangeWeight import toChangeWeight
 
 import gbfs_globals as GG
+from helper import log_population_metrics, save_pareto_front_csv
 
 def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
     """
@@ -57,8 +58,15 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
     # print("Initial featIdx:")
     # print(featIdx)
 
+    print(GG.Zout)
+    print(GG.kNeiMatrix)
+    print(GG.kNeiZout)
+
+
+
     # Sort initial population by non-domination (sync chromosome_f & featIdx)
     chromosome_f, featIdx = non_domination_sort_mod(chromosome_f, M, V_f, featIdx)
+    save_pareto_front_csv(chromosome_f, 0, V_f, run_dir)
     # print("After initial non-dominated sorting:")
     # print(chromosome_f)
     # print(featIdx)

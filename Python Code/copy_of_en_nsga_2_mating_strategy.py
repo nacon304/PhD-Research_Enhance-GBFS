@@ -11,7 +11,7 @@ from toChangeWeight import toChangeWeight
 import gbfs_globals as GG
 from helper import log_population_metrics, save_pareto_front_csv
 
-def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f):
+def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
     """
     Parameters
     ----------

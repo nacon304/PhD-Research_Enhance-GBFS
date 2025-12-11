@@ -3,6 +3,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score
 
+import gbfs_globals as GG
+
 def eval_subset_acc(X, y, feat_set, n_neighbors=5, cv=5, use_cv=True, random_state=0):
     """
     Đánh giá accuracy của subset feat_set trên (X, y).
@@ -49,6 +51,7 @@ def red_to_set(f, S, R, mode="max"):
     if len(S) == 0:
         return 0.0
     vals = R[f, S]
+    vals = np.abs(1.0 - vals)
     if mode == "max":
         return float(np.max(vals))
     elif mode == "mean":
@@ -227,3 +230,138 @@ def buddy_sfs(
                 added += 1
 
     return np.array(sorted(S)), current_acc
+
+def rc_topk(
+    S0, C_matrix, R_matrix,
+    max_add=10, tau=0.5,
+    comp_mode="max", red_mode="max"
+):
+    """
+    Chọn thêm tối đa max_add feature chỉ dựa trên R, C (và acc_single nếu muốn).
+    Không chạy KNN, không CV.
+
+    score(f) = alpha * acc_single[f] + beta * comp(f, S0) - gamma * red(f, S0)
+    """
+    S = set(S0)
+    n_feat = R_matrix.shape[0]
+    all_features = np.arange(n_feat, dtype=int)
+
+    scores = np.full(n_feat, -np.inf, dtype=float)
+
+    for f in all_features:
+        if f in S:
+            continue
+        comp_f = comp_to_set(f, S, C_matrix, mode=comp_mode)
+        red_f  = red_to_set(f, S, R_matrix, mode=red_mode)
+        scores[f] = comp_f - tau * red_f
+
+    # Chọn top-k theo score
+    candidates = np.argsort(-scores)  # giảm dần
+    added = 0
+    for f in candidates:
+        if scores[f] <= 0:
+            break
+        if f in S:
+            continue
+        S.add(f)
+        added += 1
+        if added >= max_add:
+            break
+
+    return np.array(sorted(S)), scores
+
+def rc_greedy(
+    S0, C_matrix, R_matrix,
+    max_add=10, tau=0.5,
+    comp_mode="max", red_mode="max"
+):
+    """
+    Greedy sequential chỉ dựa trên:
+        score(f|S) = beta * comp(f, S) - gamma * red(f, S)
+
+    Không gọi eval_subset_acc.
+    """
+    S = set(S0)
+    n_feat = R_matrix.shape[0]
+    all_features = np.arange(n_feat, dtype=int)
+
+    for _ in range(max_add):
+        best_f = None
+        best_score = -1e9
+
+        for f in all_features:
+            if f in S:
+                continue
+            comp_f = comp_to_set(f, S, C_matrix, mode=comp_mode)
+            red_f  = red_to_set(f, S, R_matrix, mode=red_mode)
+
+            score_f = comp_f - tau * red_f
+
+            if score_f > best_score:
+                best_score = score_f
+                best_f = f
+
+        if best_f is None or best_score <= 0:
+            break
+        S.add(best_f)
+
+    return np.array(sorted(S))
+
+# ---------- Dispatcher: dùng trong evaluate_objective_f ----------
+
+def apply_sequential_strategy(core_idx):
+    """
+    core_idx: np.ndarray index feature sau K-shell.
+    Dùng GG.seq_mode để quyết định chạy chiến lược nào.
+    Trả về: feat_idx_mở rộng (index global).
+    """
+    mode = getattr(GG, "seq_mode", None)
+    max_add = getattr(GG, "seq_max_add", 5)
+    max_buddy_per_core = getattr(GG, "seq_max_buddy_per_core", 1)
+
+    core_idx = np.asarray(core_idx, dtype=int)
+    X_tr, y_tr = GG.trData, GG.trLabel
+    C = GG.C_matrix
+    R = GG.Zout
+
+    if mode is None or mode == "none":
+        return core_idx
+
+    if mode == "sfs_acc_only":
+        S_ext, _ = sfs_acc_only(X_tr, y_tr, core_idx, max_add=max_add)
+        return S_ext
+
+    if mode == "sfs_acc_comp_red":
+        S_ext, _ = sfs_acc_comp_red(X_tr, y_tr, core_idx, C, R, max_add=max_add)
+        return S_ext
+
+    if mode == "sfs_prefilter_comp":
+        S_ext, _, _ = sfs_prefilter_comp(X_tr, y_tr, core_idx, C, R, max_add=max_add)
+        return S_ext
+
+    if mode == "buddy_sfs":
+        S_ext, _ = buddy_sfs(X_tr, y_tr, core_idx, C, R, max_buddy_per_core=max_buddy_per_core)
+        return S_ext
+    
+    if mode == "rc_topk":
+        S_ext, _ = rc_topk(
+            core_idx,
+            C,
+            R,
+            max_add=max_add,
+            tau=getattr(GG, "rc_tau", 0.5),
+        )
+        return S_ext
+
+    if mode == "rc_greedy":
+        S_ext = rc_greedy(
+            core_idx,
+            C,
+            R,
+            max_add=max_add,
+            tau=getattr(GG, "rc_tau", 0.5),
+        )
+        return S_ext
+
+    # fallback
+    return core_idx

@@ -35,6 +35,11 @@ M = 2
 
 acc_single = None
 C_matrix = None
+seq_mode = "none"
+seq_max_add = 5
+seq_max_buddy_per_core = 1
+
+rc_tau = 0.5
 
 TTT = []
 TTTT = []

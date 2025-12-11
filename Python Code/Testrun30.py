@@ -4,8 +4,8 @@ from runn import runn
 import gbfs_globals as GG
 
 def main():
-    mat_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Result Implementation 1"
-    GG.visual_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Visualize Implementation 1"
+    mat_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Result Implementation 1 v2"
+    GG.visual_dir = "D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Visualize Implementation 1 v2"
     os.makedirs(mat_dir, exist_ok=True)
 
     # for i in range(1, 15):

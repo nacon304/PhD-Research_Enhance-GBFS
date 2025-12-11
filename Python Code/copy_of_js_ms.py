@@ -34,6 +34,41 @@ def eval_on_test(X_tr, y_tr, X_te, y_te, S):
     pred = knn.predict(X_te[:, S])
     return np.mean(pred == y_te)
 
+def run_one_mode(kNeiAdj, run_dir, zData, seq_mode, pop=20, times=50):
+    """
+    Chạy newtry_ms với một chiến lược seq_mode (sau K-shell) và trả về:
+        - selected_features
+        - selected_num
+        - acc_test
+        - red (redundancy)
+        - kNeigh_chosen
+        - elapsed_time  (NEW)
+    """
+    GG.seq_mode = seq_mode
+
+    tic_mode = perf_counter()
+
+    if seq_mode != "none":
+        run_dir = ''
+    featIdx, _, _, kNeigh_chosen = newtry_ms(kNeiAdj, pop, times, run_dir)
+    featIdx = np.asarray(featIdx)
+    selected_features = np.where(featIdx != 0)[0]
+    selected_num = selected_features.size
+
+    if selected_num == 0:
+        acc = 0.0
+        red = 0.0
+    else:
+        acc = eval_on_test(GG.trData, GG.trLabel, GG.teData, GG.teLabel, selected_features)
+        if seq_mode == "none":
+            red = redundancy_rate_subset(selected_features, zData)
+        else:
+            red = 0.0
+
+    elapsed = perf_counter() - tic_mode
+
+    return selected_features, selected_num, acc, red, kNeigh_chosen, elapsed
+
 def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     """
     Parameters
@@ -67,6 +102,7 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     FNUM = np.zeros(RUNS, dtype=float)
     FSET = [[] for _ in range(RUNS + 2)]
     RED = np.zeros(RUNS, dtype=float)
+    T = np.zeros(RUNS, dtype=float)
 
     ACC_S1 = np.zeros(RUNS, dtype=float)
     ACC_S2 = np.zeros(RUNS, dtype=float)
@@ -76,6 +112,10 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     FNUM_S2 = np.zeros(RUNS, dtype=float)
     FNUM_S3 = np.zeros(RUNS, dtype=float)
     FNUM_S4 = np.zeros(RUNS, dtype=float)
+    TIME_S1 = np.zeros(RUNS, dtype=float)
+    TIME_S2 = np.zeros(RUNS, dtype=float)
+    TIME_S3 = np.zeros(RUNS, dtype=float)
+    TIME_S4 = np.zeros(RUNS, dtype=float)
 
     assiNum = np.zeros(RUNS, dtype=float)
 
@@ -83,7 +123,6 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     GG.data = zData
     GG.featNum = zData.shape[1]
 
-    T = np.zeros(RUNS, dtype=float)
     GG.kNeigh = 5
 
     row = zData.shape[0]
@@ -171,59 +210,36 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
             random_state=42
         )
 
-        # ====== Feature selection algorithm ======
-        featIdx, _, _, kNeigh_chosen = newtry_ms(kNeiAdj, 20, 50, run_dir)
-        featIdx = np.asarray(featIdx)
-        selected_features = np.where(featIdx != 0)[0]
-        selected_num = selected_features.size
-        GG.run_logs[Rtimes]["kNeigh_chosen"] = kNeigh_chosen
-        GG.run_logs[Rtimes]["selected_features"] = selected_features
-        GG.run_logs[Rtimes]["kNeiMatrix"] = GG.kNeiMatrix
+        init_time = perf_counter() - tic
 
-        # ====== Evaluate by KNN ======
-        if selected_num == 0:
-            acc = 0.0
-            red = 0.0
-        else:
-            # knn = KNeighborsClassifier(n_neighbors=5)
-            # knn.fit(GG.trData[:, selected_features], GG.trLabel)
-            # predLabel = knn.predict(GG.teData[:, selected_features])
-            # acc = np.mean(predLabel == GG.teLabel)
-            acc = eval_on_test(GG.trData, GG.trLabel, GG.teData, GG.teLabel, selected_features)
-            red = redundancy_rate_subset(selected_features, zData)
-
-        # ====== Store results ======
+        # # ====== Feature selection algorithm cho từng mode ======
+        # # Mode 0: baseline (không sequential sau K-shell)
+        # selected_features_base, selected_num_base, acc_base, red_base, kNeigh_chosen_base, elapsed_base = run_one_mode(
+        #     kNeiAdj, run_dir, zData, seq_mode="none", pop=20, times=50
+        # )
+        # # ====== Store results (baseline) ======
         idx = Rtimes - 1
-        ACC[idx] = acc
-        FNUM[idx] = selected_num
-        FSET[idx] = selected_features
-        RED[idx] = red
+        # ACC[idx] = acc_base
+        # FNUM[idx] = selected_num_base
+        # FSET[idx] = selected_features_base
+        # RED[idx] = red_base
+        # T[idx] = elapsed_base + init_time
+        # assiNum[idx] = np.sum(GG.assiNumInside)
 
-        T[idx] = perf_counter() - tic
-
-        assiNum[idx] = np.sum(GG.assiNumInside)
-
-        # ===== Sequential strategies ======
-        S0 = selected_features
-        X_tr, y_tr = GG.trData, GG.trLabel
-        C = GG.C_matrix
-        R = GG.Zout
-        S1, acc1 = sfs_acc_only(X_tr, y_tr, S0, max_add=5)
-        S2, acc2 = sfs_acc_comp_red(X_tr, y_tr, S0, C, R, max_add=5)
-        S3, acc3, cand3 = sfs_prefilter_comp(X_tr, y_tr, S0, C, R, max_add=5)
-        S4, acc4 = buddy_sfs(X_tr, y_tr, S0, C, R, max_buddy_per_core=1)
-        acc1_test = eval_on_test(GG.trData, GG.trLabel, GG.teData, GG.teLabel, S1)
-        acc2_test = eval_on_test(GG.trData, GG.trLabel, GG.teData, GG.teLabel, S2)
-        acc3_test = eval_on_test(GG.trData, GG.trLabel, GG.teData, GG.teLabel, S3)
-        acc4_test = eval_on_test(GG.trData, GG.trLabel, GG.teData, GG.teLabel, S4)
-        ACC_S1[idx] = acc1_test
-        ACC_S2[idx] = acc2_test
-        ACC_S3[idx] = acc3_test
-        ACC_S4[idx] = acc4_test
-        FNUM_S1[idx] = len(S1)
-        FNUM_S2[idx] = len(S2)
-        FNUM_S3[idx] = len(S3)
-        FNUM_S4[idx] = len(S4)
+        # Mode 1–4: các chiến lược sequential sau K-shell
+        selected_S1, num_S1, acc_S1_run, _, _, elapsed_S1 = run_one_mode(
+            kNeiAdj, run_dir, zData, seq_mode="rc_topk", pop=20, times=50
+        )
+        selected_S2, num_S2, acc_S2_run, _, _, elapsed_S2 = run_one_mode(
+            kNeiAdj, run_dir, zData, seq_mode="rc_greedy", pop=20, times=50
+        )
+        # ====== Store results (4 sequential strategies) ======
+        ACC_S1[idx] = acc_S1_run
+        ACC_S2[idx] = acc_S2_run
+        FNUM_S1[idx] = num_S1
+        FNUM_S2[idx] = num_S2
+        TIME_S1[idx] = elapsed_S1 + init_time
+        TIME_S2[idx] = elapsed_S2 + init_time
 
     # ====== Save logs for each run ======
     # for run_id, logs in GG.run_logs.items():
@@ -256,56 +272,59 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
             "run": r + 1,
             "acc_base": ACC[r],
             "fnum_base": FNUM[r],
+            "time_base": T[r],
+
             "acc_S1": ACC_S1[r],
             "fnum_S1": FNUM_S1[r],
+            "time_S1": TIME_S1[r],
+
             "acc_S2": ACC_S2[r],
             "fnum_S2": FNUM_S2[r],
-            "acc_S3": ACC_S3[r],
-            "fnum_S3": FNUM_S3[r],
-            "acc_S4": ACC_S4[r],
-            "fnum_S4": FNUM_S4[r],
+            "time_S2": TIME_S2[r],
         })
     seq_rows.append({
         "run": "mean",
         "acc_base": float(ACC.mean()),
         "fnum_base": float(FNUM.mean()),
+        "time_base": float(T.mean()),
+
         "acc_S1": float(ACC_S1.mean()),
         "fnum_S1": float(FNUM_S1.mean()),
+        "time_S1": float(TIME_S1.mean()),
+
         "acc_S2": float(ACC_S2.mean()),
         "fnum_S2": float(FNUM_S2.mean()),
-        "acc_S3": float(ACC_S3.mean()),
-        "fnum_S3": float(FNUM_S3.mean()),
-        "acc_S4": float(ACC_S4.mean()),
-        "fnum_S4": float(FNUM_S4.mean()),
+        "time_S2": float(TIME_S2.mean()),
     })
     seq_rows.append({
         "run": "std",
         "acc_base": float(ACC.std()),
         "fnum_base": float(FNUM.std()),
+        "time_base": float(T.std()),
+
         "acc_S1": float(ACC_S1.std()),
         "fnum_S1": float(FNUM_S1.std()),
+        "time_S1": float(TIME_S1.std()),
+
         "acc_S2": float(ACC_S2.std()),
         "fnum_S2": float(FNUM_S2.std()),
-        "acc_S3": float(ACC_S3.std()),
-        "fnum_S3": float(FNUM_S3.std()),
-        "acc_S4": float(ACC_S4.std()),
-        "fnum_S4": float(FNUM_S4.std()),
+        "time_S2": float(TIME_S2.std()),
     })
-    print(seq_rows)
     df_seq = pd.DataFrame(seq_rows)
-    seq_summary_path = os.path.join(output_dir, "sequential_summary.csv")
-    df_seq.to_csv(seq_summary_path, index=False)
+    return df_seq
+    # seq_summary_path = os.path.join(output_dir, "sequential_summary.csv")
+    # df_seq.to_csv(seq_summary_path, index=False)
 
-    # ====== Append mean and std (RUNS+1, RUNS+2) ======
-    ACC = np.concatenate([ACC, [ACC.mean(), ACC.std()]])
-    FNUM = np.concatenate([FNUM, [FNUM.mean(), FNUM.std()]])
-    RED = np.concatenate([RED, [RED.mean(), RED.std()]])
-    T = np.concatenate([T, [T.mean(), T.std()]])
-    assiNum = np.concatenate([assiNum, [assiNum.mean(), assiNum.std()]])
+    # # ====== Append mean and std (RUNS+1, RUNS+2) ======
+    # ACC = np.concatenate([ACC, [ACC.mean(), ACC.std()]])
+    # FNUM = np.concatenate([FNUM, [FNUM.mean(), FNUM.std()]])
+    # RED = np.concatenate([RED, [RED.mean(), RED.std()]])
+    # T = np.concatenate([T, [T.mean(), T.std()]])
+    # assiNum = np.concatenate([assiNum, [assiNum.mean(), assiNum.std()]])
 
-    # [ACC, FNUM, FSET, RED, T]
-    product = []
-    for i in range(RUNS + 2):
-        product.append([ACC[i], FNUM[i], FSET[i], RED[i], T[i]])
+    # # [ACC, FNUM, FSET, RED, T]
+    # product = []
+    # for i in range(RUNS + 2):
+    #     product.append([ACC[i], FNUM[i], FSET[i], RED[i], T[i]])
 
-    return product, T.reshape(-1, 1), datasetName, assiNum.reshape(-1, 1)
+    # return product, T.reshape(-1, 1), datasetName, assiNum.reshape(-1, 1)

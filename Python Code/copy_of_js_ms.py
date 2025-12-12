@@ -30,7 +30,7 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
 
     Returns
     -------
-    product : list of [ACC, FNUM, FSET, T]
+    product : list of [ACC, FNUM, FSET, RED, T]
     T : np.ndarray, shape (RUNS+2, 1)
     datasetName : str
     assiNum : np.ndarray, shape (RUNS+2, 1)

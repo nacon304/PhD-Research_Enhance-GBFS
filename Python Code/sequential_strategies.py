@@ -240,7 +240,7 @@ def rc_topk(
     Chọn thêm tối đa max_add feature chỉ dựa trên R, C (và acc_single nếu muốn).
     Không chạy KNN, không CV.
 
-    score(f) = alpha * acc_single[f] + beta * comp(f, S0) - gamma * red(f, S0)
+    score(f) = comp(f, S0) - tau * red(f, S0)
     """
     S = set(S0)
     n_feat = R_matrix.shape[0]
@@ -277,7 +277,7 @@ def rc_greedy(
 ):
     """
     Greedy sequential chỉ dựa trên:
-        score(f|S) = beta * comp(f, S) - gamma * red(f, S)
+        score(f|S) = comp(f, S) - tau * red(f, S)
 
     Không gọi eval_subset_acc.
     """

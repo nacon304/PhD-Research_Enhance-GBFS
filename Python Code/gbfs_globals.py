@@ -3,6 +3,8 @@ GAPGEN = 5
 DELT = None
 OMEGA = None
 
+RUNS = 3
+
 data = None
 label = None
 

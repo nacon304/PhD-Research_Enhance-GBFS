@@ -24,7 +24,7 @@ def runn(data_idx):
     os.makedirs(pf_dir, exist_ok=True)
 
     DELT = 0.2
-    RUNS = 30
+    RUNS = GG.RUNS
 
     # Regularize data_idx
     if isinstance(data_idx, (int, float)):

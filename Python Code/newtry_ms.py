@@ -61,10 +61,11 @@ def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
     pareto_objs  : np.ndarray, shape (n_solutions, 2)
         Giá trị (obj1, obj2) tương ứng với mỗi nghiệm Pareto.
     """
-    if GG.featNum is None or GG.kNeigh is None:
+    if GG.featNum is None:
         raise ValueError("newtry_ms: GG.featNum hoặc GG.kNeigh chưa được set.")
 
-    V_f = GG.featNum * GG.kNeigh
+    V_f = int(sum(len(nb) for nb in GG.neigh_list))
+    GG.V_f = V_f
     templateAdj = np.asarray(inputAdj, dtype=float)
 
     chromes = copy_of_en_nsga_2_mating_strategy(pop, times, templateAdj, V_f, run_dir)

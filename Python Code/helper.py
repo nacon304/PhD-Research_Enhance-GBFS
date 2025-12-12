@@ -138,31 +138,42 @@ def log_population_metrics(chromosome_f, i, V_f, run_dir):
     #     df = pd.DataFrame([row])
     #     df.to_csv(metrics_path, mode="a", header=False, index=False)
 
-def plot_knn_graph_with_selected(kNeiMatrix, edge_mask, selected_features,
-                                 run_dir, run_id=None, filename_prefix="knn_graph"):
+def plot_knn_graph_with_selected(neighbors, edge_mask,
+                                 selected_features,
+                                 run_dir,
+                                 run_id=None,
+                                 filename_prefix="knn_graph"):
     """
-    Vẽ đồ thị k-NN từ kNeiMatrix và vector bit edge_mask (kNeigh_chosen).
-    Mỗi phần tử edge_mask[t] quyết định có vẽ cạnh (i, j) tương ứng hay không.
+    Vẽ đồ thị từ neigh_list (GG.neigh_list) và vector bit edge_mask (kNeigh_chosen).
 
-    Mapping:
-        n_features, max_k = kNeiMatrix.shape
-        edge_mask size = n_features * max_k
-        flat_index = i * max_k + pos  (pos = 0..max_k-1)
-        j = kNeiMatrix[i, pos]
-
-    Nếu edge_mask[flat_index] == 1 -> add edge (i, j).
-
-    Các feature trong selected_features sẽ được tô đậm hơn.
+    Representation (đồng nhất với decodeNet & V_f):
+        - GG.neigh_list: list length = n_features,
+              neigh_list[i] = array/list các neighbor j của i,
+              duyệt theo đúng thứ tự để flatten.
+        - edge_mask: mảng 0/1 độ dài V_f, với
+              V_f = sum(len(nb) for nb in GG.neigh_list)
+          Mỗi phần tử edge_mask[idx] quyết định có vẽ cạnh (i, j) tương ứng hay không,
+          với thứ tự duyệt:
+              idx chạy tăng dần theo:
+                  for i in range(n_features):
+                      for j in neigh_list[i]:
+                          ...
     """
-    kNeiMatrix = np.asarray(kNeiMatrix, dtype=int)
+    # --- Lấy neigh_list từ global ---
+    neigh_list = neighbors
+
+    # Đảm bảo tất cả phần tử là np.array[int]
+    neigh_list = [np.asarray(nb, dtype=int) for nb in neigh_list]
+
+    n_features = len(neigh_list)
     edge_mask = np.asarray(edge_mask).ravel()
     selected_features = np.asarray(selected_features, dtype=int)
 
-    n_features, max_k = kNeiMatrix.shape
-    expected_len = n_features * max_k
+    expected_len = int(sum(len(nb) for nb in neigh_list))
     if edge_mask.size != expected_len:
         raise ValueError(
-            f"edge_mask length {edge_mask.size} != n_features*max_k = {expected_len}"
+            f"edge_mask length {edge_mask.size} != "
+            f"sum(len(nb) for nb in neigh_list) = {expected_len}"
         )
 
     # ---- Xây graph từ bit-mask ----
@@ -171,14 +182,14 @@ def plot_knn_graph_with_selected(kNeiMatrix, edge_mask, selected_features,
 
     idx = 0
     for i in range(n_features):
-        for pos in range(max_k):
+        neigh = neigh_list[i]
+        for j in neigh:
             if edge_mask[idx] != 0:
-                j = int(kNeiMatrix[i, pos])
-                if i != j:
-                    G.add_edge(i, j)
+                j_int = int(j)
+                if i != j_int:
+                    G.add_edge(i, j_int)
             idx += 1
 
-    # Nếu không có cạnh nào, vẫn vẽ node cho dễ nhìn
     # ---- Layout ----
     pos = nx.spring_layout(G, seed=42)
 
@@ -213,19 +224,21 @@ def plot_knn_graph_with_selected(kNeiMatrix, edge_mask, selected_features,
     plt.figure(figsize=(6, 6))
 
     if len(G.edges()) > 0:
-        nx.draw_networkx_edges(G, pos,
-                               edge_color=edge_colors,
-                               width=edge_widths,
-                               alpha=0.8)
+        nx.draw_networkx_edges(
+            G, pos,
+            edge_color=edge_colors,
+            width=edge_widths,
+            alpha=0.8
+        )
 
     nx.draw_networkx_nodes(
         G, pos,
         node_color=node_colors,
-        node_size=node_sizes
+        node_size=node_sizes,
     )
     nx.draw_networkx_labels(G, pos, font_size=10)
 
-    title = "k-NN Graph (mask-based edges)"
+    title = "Graph (mask-based edges)"
     if run_id is not None:
         title += f" - Run {run_id}"
     plt.title(title)
@@ -241,4 +254,3 @@ def plot_knn_graph_with_selected(kNeiMatrix, edge_mask, selected_features,
     out_path = os.path.join(run_dir, fname)
     plt.savefig(out_path, dpi=300)
     plt.close()
-    # print(f"[plot] Saved k-NN graph to: {out_path}")

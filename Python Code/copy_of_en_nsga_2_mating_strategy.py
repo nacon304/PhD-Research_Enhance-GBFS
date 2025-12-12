@@ -46,7 +46,7 @@ def copy_of_en_nsga_2_mating_strategy(pop, gen, templateAdj, V_f, run_dir):
     pop = int(round(pop))
     gen = int(round(gen))
 
-    if pop < 5:
+    if pop < 20:
         raise ValueError("Minimum population for running this function is 20")
     if gen < 5:
         raise ValueError("Minimum number of generations is 5")

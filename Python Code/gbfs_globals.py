@@ -3,7 +3,7 @@ GAPGEN = 5
 DELT = None
 OMEGA = None
 
-RUNS = 3
+RUNS = 30
 
 data = None
 label = None
@@ -17,7 +17,7 @@ vWeight = None
 vWeight1 = None
 
 kNeigh = 5
-kNeiMatrix = None
+V_f = None
 kNeiZout = None
 
 trData = None
@@ -32,6 +32,11 @@ visual_dir = None
 current_run = None
 run_logs = {}
 M = 2
+
+# init_mode = "local_thresh" 
+init_mode = "knn" 
+init_degrees = None
+neigh_list = None
 
 TTT = []
 TTTT = []

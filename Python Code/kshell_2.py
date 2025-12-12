@@ -57,8 +57,9 @@ def kshell_2(Gadj0):
                     del featSeq[pos]
 
                 # remove their edges from adjacency matrix
-                Gadj[feat_pos, :] = 0
-                Gadj[:, feat_pos] = 0
+                a_arr = np.asarray(a, dtype=int)
+                Gadj[a_arr, :] = 0.0
+                Gadj[:, a_arr] = 0.0
 
                 # recompute degree for remaining nodes
                 if len(featSeq) == 0:

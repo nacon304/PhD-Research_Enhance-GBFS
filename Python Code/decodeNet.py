@@ -4,8 +4,6 @@ import gbfs_globals as GG
 
 def decodeNet(f, templateAdj):
     """
-    Python version of decodeNet.m
-
     Parameters
     ----------
     f : array-like, shape (featNum*kNeigh,)
@@ -28,19 +26,28 @@ def decodeNet(f, templateAdj):
             f"decodeNet: f size {f.size} != featNum*kNeigh = {GG.featNum*GG.kNeigh}"
         )
 
-    # reshape chromosome into featNum x kNeigh
-    rShapeF = f.reshape((GG.featNum, GG.kNeigh))
-
-    STD = np.asarray(GG.kNeiMatrix, dtype=int) * rShapeF
-
-    # For each feature, activate edges according to genetic mask
+    total_genes = GG.V_f
+    if f.size != total_genes:
+        raise ValueError(
+            f"decodeNet: f size {f.size} != total genes from neigh_list = {total_genes}"
+        )
+    
+    offset = 0
     for i in range(GG.featNum):
-        # indices where STD(i,:) != 0, these are neighbor indices
-        idx = np.nonzero(STD[i, :])[0]
-        if idx.size > 0:
-            # neighbor indices (0-based; kNeiMatrix đã được xây 0-based ở Python)
-            neigh_indices = STD[i, idx].astype(int)
-            MODE[i, neigh_indices] = 1.0
+        neigh = np.asarray(GG.neigh_list[i], dtype=int)
+        deg_i = neigh.size
+        if deg_i == 0:
+            continue
+
+        genes_i = f[offset : offset + deg_i]
+        offset += deg_i
+
+        on_local = np.nonzero(genes_i)[0]
+        if on_local.size == 0:
+            continue
+
+        j_idx = neigh[on_local]
+        MODE[i, j_idx] = 1.0
 
     indivNet = MODE * K
     return indivNet

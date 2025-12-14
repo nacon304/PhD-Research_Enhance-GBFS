@@ -62,8 +62,6 @@ def init_graph_local_threshold(
 
         tau_i = np.quantile(positive, quantile)
         neigh = np.where(row >= tau_i)[0]
-        print(tau_i)
-        print(neigh)
 
         if exclude_self:
             neigh = neigh[neigh != i]

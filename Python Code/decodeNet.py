@@ -21,11 +21,6 @@ def decodeNet(f, templateAdj):
     if GG.featNum is None or GG.kNeigh is None:
         raise ValueError("decodeNet: featNum or kNeigh is not set (global).")
 
-    if f.size != GG.featNum * GG.kNeigh:
-        raise ValueError(
-            f"decodeNet: f size {f.size} != featNum*kNeigh = {GG.featNum*GG.kNeigh}"
-        )
-
     total_genes = GG.V_f
     if f.size != total_genes:
         raise ValueError(

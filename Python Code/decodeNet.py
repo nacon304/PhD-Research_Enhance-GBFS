@@ -31,15 +31,11 @@ def decodeNet(f, templateAdj):
     # reshape chromosome into featNum x kNeigh
     rShapeF = f.reshape((GG.featNum, GG.kNeigh))
 
-    STD = np.asarray(GG.kNeiMatrix, dtype=int) * rShapeF
-
     # For each feature, activate edges according to genetic mask
     for i in range(GG.featNum):
-        # indices where STD(i,:) != 0, these are neighbor indices
-        idx = np.nonzero(STD[i, :])[0]
-        if idx.size > 0:
-            # neighbor indices (0-based; kNeiMatrix đã được xây 0-based ở Python)
-            neigh_indices = STD[i, idx].astype(int)
+        chosen_pos = np.where(rShapeF[i, :] != 0)[0]
+        if chosen_pos.size > 0:
+            neigh_indices = GG.kNeiMatrix[i, chosen_pos].astype(int)
             MODE[i, neigh_indices] = 1.0
 
     indivNet = MODE * K

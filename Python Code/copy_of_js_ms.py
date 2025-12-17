@@ -8,7 +8,8 @@ from sklearn.neighbors import KNeighborsClassifier
 
 from myinputdatasetXD import myinputdatasetXD
 from fisherScore import fisherScore
-from newtry_ms import newtry_ms
+# from newtry_ms import newtry_ms
+from GBFS_element import newtry_ms
 from helper import _mapminmax_zero_one, redundancy_rate_subset, plot_knn_graph_with_selected
 
 from sklearn.model_selection import StratifiedShuffleSplit
@@ -124,7 +125,8 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
         kNeiAdj = squareform(GG.kNeiZout, force='tovector', checks=False)
 
         # ====== Feature selection algorithm ======
-        featIdx, _, _, kNeigh_chosen = newtry_ms(kNeiAdj, 20, 50, run_dir)
+        # featIdx, _, _, kNeigh_chosen = newtry_ms(kNeiAdj, 20, 50, run_dir)
+        featIdx, _, _, kNeigh_chosen = newtry_ms(kNeiAdj, 20, 50, run_dir, n_jobs=8, parallel_backend="process")
         featIdx = np.asarray(featIdx)
         selected_features = np.where(featIdx != 0)[0]
         selected_num = selected_features.size
@@ -154,30 +156,30 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
 
         assiNum[idx] = np.sum(GG.assiNumInside)
 
-    # ====== Save logs for each run ======
-    for run_id, logs in GG.run_logs.items():
-        run_dir = f"{output_dir}/run_{run_id}"
-        pop_rows = logs.get("pop_metrics", [])
-        if pop_rows:
-            df_pop = pd.DataFrame(pop_rows)
-            df_pop.to_csv(os.path.join(run_dir, "pop_metrics.csv"), index=False)
-        pareto_list = logs.get("pareto_fronts", [])
-        for entry in pareto_list:
-            gen = entry["gen"]
-            df = entry["df"]
-            csv_file_name = os.path.join(run_dir, f"gen_{gen:03d}.csv")
-            df.to_csv(csv_file_name, index=False)
-        p_kNeigh_chosen = logs.get("kNeigh_chosen", None)
-        p_selected_features = logs.get("selected_features", None)
-        p_kNeiMatrix = logs.get("kNeiMatrix", None)
-        plot_knn_graph_with_selected(
-            p_kNeiMatrix,
-            p_kNeigh_chosen,         
-            p_selected_features,
-            run_dir,
-            run_id=run_id,
-            filename_prefix="knn_graph"
-        )
+    # # ====== Save logs for each run ======
+    # for run_id, logs in GG.run_logs.items():
+    #     run_dir = f"{output_dir}/run_{run_id}"
+    #     pop_rows = logs.get("pop_metrics", [])
+    #     if pop_rows:
+    #         df_pop = pd.DataFrame(pop_rows)
+    #         df_pop.to_csv(os.path.join(run_dir, "pop_metrics.csv"), index=False)
+    #     pareto_list = logs.get("pareto_fronts", [])
+    #     for entry in pareto_list:
+    #         gen = entry["gen"]
+    #         df = entry["df"]
+    #         csv_file_name = os.path.join(run_dir, f"gen_{gen:03d}.csv")
+    #         df.to_csv(csv_file_name, index=False)
+    #     p_kNeigh_chosen = logs.get("kNeigh_chosen", None)
+    #     p_selected_features = logs.get("selected_features", None)
+    #     p_kNeiMatrix = logs.get("kNeiMatrix", None)
+    #     plot_knn_graph_with_selected(
+    #         p_kNeiMatrix,
+    #         p_kNeigh_chosen,         
+    #         p_selected_features,
+    #         run_dir,
+    #         run_id=run_id,
+    #         filename_prefix="knn_graph"
+    #     )
 
     # ====== Append mean and std (RUNS+1, RUNS+2) ======
     ACC = np.concatenate([ACC, [ACC.mean(), ACC.std()]])

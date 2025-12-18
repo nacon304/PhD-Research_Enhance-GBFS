@@ -270,15 +270,15 @@ def compute_complementarity_matrix(
     """
     C_ij = max(0, acc({i,j}) - max(acc({i}), acc({j})))
 
-    candidate_pairs hỗ trợ 3 dạng:
-      (1) None -> tính full (i<j)
-      (2) kNeiMatrix: np.ndarray shape (n_features, max_k)
-      (3) neigh_list: list/tuple length n_features, neigh_list[i] là iterable các neighbor của i (ragged)
-      (4) list/array các cặp (i,j) shape (n_pairs, 2)
+    candidate_pairs supports:
+      (1) None -> full matrix
+      (2) kNeiMatrix: np.ndarray (n_features, k)
+      (3) neigh_list: list/tuple length n_features, neigh_list[i] iterable neighbors (ragged)
+      (4) explicit pairs array shape (n_pairs, 2)
     """
     X = np.asarray(X, dtype=float)
     y = np.asarray(y)
-    n_samples, n_features = X.shape
+    _, n_features = X.shape
 
     knn = KNeighborsClassifier(n_neighbors=n_neighbors)
     C = np.zeros((n_features, n_features), dtype=float)
@@ -298,51 +298,48 @@ def compute_complementarity_matrix(
             pred = knn.predict(Xij)
             return float(accuracy_score(y, pred))
 
-    # ---- build a unique undirected pair set {(a,b), a<b} ----
     pairs = set()
 
     if candidate_pairs is None:
         for i in range(n_features):
             for j in range(i + 1, n_features):
                 pairs.add((i, j))
-
     else:
-        # case (2): fixed kNeiMatrix
         if isinstance(candidate_pairs, np.ndarray) and candidate_pairs.ndim == 2:
-            kNeiMatrix = np.asarray(candidate_pairs, dtype=int)
-            assert kNeiMatrix.shape[0] == n_features, "kNeiMatrix rows must equal n_features"
+            # kNeiMatrix
+            mat = np.asarray(candidate_pairs, dtype=int)
+            if mat.shape[0] != n_features:
+                raise ValueError("kNeiMatrix rows must equal n_features")
             for i in range(n_features):
-                for j in kNeiMatrix[i]:
+                for j in mat[i]:
                     j = int(j)
-                    if j < 0 or j >= n_features or j == i:
+                    if j == i or j < 0 or j >= n_features:
                         continue
                     a, b = (i, j) if i < j else (j, i)
                     pairs.add((a, b))
 
-        # case (3): neigh_list (ragged)
         elif isinstance(candidate_pairs, (list, tuple)) and len(candidate_pairs) == n_features:
+            # neigh_list (ragged)
             neigh_list = candidate_pairs
             for i in range(n_features):
                 for j in neigh_list[i]:
                     j = int(j)
-                    if j < 0 or j >= n_features or j == i:
+                    if j == i or j < 0 or j >= n_features:
                         continue
                     a, b = (i, j) if i < j else (j, i)
                     pairs.add((a, b))
-
-        # case (4): list of explicit pairs
         else:
+            # explicit pairs
             arr = np.asarray(candidate_pairs, dtype=int)
             if arr.ndim != 2 or arr.shape[1] != 2:
-                raise ValueError("candidate_pairs must be None, kNeiMatrix (n,k), neigh_list (len=n), or (n_pairs,2).")
+                raise ValueError("candidate_pairs must be None, (n,k), neigh_list(len=n), or (n_pairs,2).")
             for i, j in arr:
                 i = int(i); j = int(j)
-                if i < 0 or i >= n_features or j < 0 or j >= n_features or i == j:
+                if i == j or i < 0 or i >= n_features or j < 0 or j >= n_features:
                     continue
                 a, b = (i, j) if i < j else (j, i)
                 pairs.add((a, b))
 
-    # ---- compute complementarity only on selected pairs ----
     for (i, j) in pairs:
         acc_ij = pair_acc(i, j)
         base = max(acc_single[i], acc_single[j])

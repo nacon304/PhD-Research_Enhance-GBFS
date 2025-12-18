@@ -3,6 +3,22 @@ import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score
+import gbfs_globals as GG
+
+def comp_to_set(f, S, C, mode="max"):
+    S = list(S)
+    if len(S) == 0:
+        return 0.0
+    vals = C[f, S]
+    return float(np.max(vals)) if mode == "max" else float(np.mean(vals))
+
+def red_to_set(f, S, R, mode="max"):
+    S = list(S)
+    if len(S) == 0:
+        return 0.0
+    vals = R[f, S]
+    vals = np.abs(1.0 - vals)
+    return float(np.max(vals)) if mode == "max" else float(np.mean(vals))
 
 def eval_subset_acc(X, y, feat_set, n_neighbors=5, cv=5, use_cv=True, random_state=42):
     feat_set = np.asarray(list(feat_set), dtype=int)
@@ -65,3 +81,109 @@ def buddy_sfs(
                 added += 1
 
     return np.array(sorted(S)), current_acc
+
+def rc_greedy(S0, C_matrix, R_matrix, max_add=10, tau=0.3, comp_mode="max", red_mode="max"):
+    """
+    Greedy add features by:
+        score(f|S) = comp(f,S) - tau * red(f,S)
+    No eval_subset_acc.
+    """
+    S = set(np.asarray(S0, dtype=int).ravel().tolist())
+    n_feat = R_matrix.shape[0]
+    all_features = np.arange(n_feat, dtype=int)
+
+    for _ in range(max_add):
+        best_f = None
+        best_score = -1e9
+
+        for f in all_features:
+            if f in S:
+                continue
+            comp_f = comp_to_set(f, S, C_matrix, mode=comp_mode)
+            red_f = red_to_set(f, S, R_matrix, mode=red_mode)
+            score_f = comp_f - tau * red_f
+            if score_f > best_score:
+                best_score = score_f
+                best_f = f
+
+        if best_f is None or best_score <= 0:
+            break
+        S.add(best_f)
+
+    return np.array(sorted(S), dtype=int)
+
+def apply_kshell_sequential(core_idx: np.ndarray) -> np.ndarray:
+    """
+    Called inside evaluate_objective_f after K-shell.
+    Reads GG.kshell_seq_mode.
+    """
+    mode = getattr(GG, "kshell_seq_mode", "none")
+    core_idx = np.asarray(core_idx, dtype=int).ravel()
+
+    if mode in [None, "none", "normal"]:
+        return core_idx
+
+    if mode == "rc_greedy":
+        if GG.C_matrix is None or GG.Zout is None:
+            raise ValueError("apply_kshell_sequential: need GG.C_matrix and GG.Zout for rc_greedy.")
+        max_add = int(getattr(GG, "kshell_max_add", 5))
+        tau = float(getattr(GG, "rc_tau", 0.3))
+        return rc_greedy(core_idx, GG.C_matrix, GG.Zout, max_add=max_add, tau=tau)
+
+    return core_idx
+
+def apply_post_sequential(
+    S0: np.ndarray,
+    mode: str,
+    X: np.ndarray,
+    y: np.ndarray,
+    C_matrix: np.ndarray = None,
+    R_matrix: np.ndarray = None,
+    buddy_kwargs: dict = None,
+):
+    """
+    Post sequential after final selected set from newtry_ms.
+
+    Parameters
+    ----------
+    S0 : array-like
+        Selected features from newtry_ms (after evolution).
+    mode : {"normal","none","buddy"}
+    X, y : training data used to evaluate buddy additions (CV inside buddy_sfs).
+    C_matrix, R_matrix : needed for buddy.
+    buddy_kwargs : dict of args forwarded to buddy_sfs
+
+    Returns
+    -------
+    S_post : np.ndarray (sorted int)
+    """
+    if S0 is None:
+        return np.array([], dtype=int)
+
+    S0 = np.asarray(S0, dtype=int).ravel()
+    if S0.size == 0:
+        return S0
+
+    if mode is None:
+        mode = "normal"
+    mode = str(mode).lower()
+
+    if mode in ["normal", "none"]:
+        return np.array(sorted(S0), dtype=int)
+
+    if mode == "buddy":
+        if C_matrix is None or R_matrix is None:
+            raise ValueError("apply_post_sequential(mode='buddy') needs C_matrix and R_matrix.")
+        if buddy_kwargs is None:
+            buddy_kwargs = {}
+
+        S_buddy, _ = buddy_sfs(
+            X, y,
+            S0=S0,
+            C_matrix=C_matrix,
+            R_matrix=R_matrix,
+            **buddy_kwargs
+        )
+        return np.asarray(S_buddy, dtype=int).ravel()
+
+    raise ValueError(f"Unknown post sequential mode: {mode}")

@@ -46,13 +46,19 @@ class ExperimentConfig:
 
     # init strategies bật/tắt ở đây
     init_modes: List[str] = field(default_factory=lambda: ["knn"])
-    seq_modes: List[str]  = field(default_factory=lambda: ["normal"])
+    kshell_seq_modes: List[str] = field(default_factory=lambda: ["normal"])
+    post_seq_modes: List[str] = field(default_factory=lambda: ["normal"])
 
     # mode nào được dùng để fill FSET/assiNum (giữ format output cũ)
-    log_mode: str = "knn"
-    log_seq_mode: str = "normal"
+    log_init_mode: str = "knn"
+    log_kshell_seq_mode: str = "normal"
+    log_post_seq_mode: str = "normal"
 
     init_params: InitParams = field(default_factory=InitParams)
+
+    # ===== K-shell sequential params =====
+    kshell_max_add: int = 5
+    kshell_rc_tau: float = 0.3
 
     # ===== buddy sequential after GBFS =====
     buddy_max_per_core: int = 1

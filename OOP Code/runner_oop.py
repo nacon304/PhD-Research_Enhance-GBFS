@@ -16,7 +16,7 @@ from helper import (
     compute_single_feature_accuracy,
     compute_complementarity_matrix,
 )
-from sequential_strategies import buddy_sfs
+from sequential_strategies import apply_post_sequential
 
 from newtry_ms import newtry_ms
 from oop_core import ExperimentConfig, get_initializer
@@ -78,9 +78,9 @@ class GBFSRunner:
         Weight = squareform(adj)
         Zout = squareform(adj)
 
-        need_buddy = ("buddy" in self.cfg.seq_modes)
+        need_acc_single = ("buddy" in self.cfg.post_seq_modes) or ("rc_greedy" in self.cfg.kshell_seq_modes)
         acc_single = None
-        if need_buddy:
+        if need_acc_single:
             acc_single = compute_single_feature_accuracy(
                 trData, trLabel,
                 n_neighbors=self.cfg.buddy_knn_k,
@@ -109,183 +109,128 @@ class GBFSRunner:
     def run_dataset(self, data_idx: int):
         RUNS = self.cfg.runs
         init_modes = list(self.cfg.init_modes)
-        seq_modes = list(self.cfg.seq_modes)
+        kshell_seq_modes = list(self.cfg.kshell_seq_modes)
+        post_seq_modes = list(self.cfg.post_seq_modes)
 
-        combos = [(im, sm) for im in init_modes for sm in seq_modes]
-        combo_keys = [f"{im}__{sm}" for (im, sm) in combos]
+        combos = [(im, ks, ps) for im in init_modes for ks in kshell_seq_modes for ps in post_seq_modes]
+        keys = [f"{im}__ks{ks}__post{ps}" for (im, ks, ps) in combos]
 
         out_dir = os.path.join(self.visual_root, f"{data_idx:02d}")
         os.makedirs(out_dir, exist_ok=True)
 
         metrics = {
-            key: {
-                "ACC": np.zeros(RUNS),
-                "FNUM": np.zeros(RUNS),
-                "RED": np.zeros(RUNS),
-                "TIME": np.zeros(RUNS),
-            }
-            for key in combo_keys
+            k: {"ACC": np.zeros(RUNS), "FNUM": np.zeros(RUNS), "RED": np.zeros(RUNS), "TIME": np.zeros(RUNS)}
+            for k in keys
         }
 
         FSET = [[] for _ in range(RUNS + 2)]
 
         for r in range(1, RUNS + 1):
             tic = perf_counter()
-
             ctx = self._prepare_context_one_run(data_idx, r)
             prep_time = perf_counter() - tic
 
+            # cache C per (run, init_mode) vì candidate_pairs=neigh_list phụ thuộc init
             C_cache = {}
+
             for init_mode in init_modes:
-                print(f"Run {r}, Init mode: {init_mode}, Seq modes: {seq_modes}")
-                init_dir = os.path.join(out_dir, f"run_{r:02d}", init_mode)
-                shutil.rmtree(init_dir, ignore_errors=True)
-                os.makedirs(init_dir, exist_ok=True)
-
-                t_base0 = perf_counter()
-
                 initializer = get_initializer(init_mode)
                 init_res = initializer.build(ctx.Zout, ctx.fisher_raw, self.cfg)
                 ctx.A_init = init_res.A_init
                 ctx.neigh_list = init_res.neighbors
 
-                # sync to GG and call legacy solver
-                sync_context_to_GG(ctx)
-
-                kNeiAdj = squareform(ctx.A_init, force="tovector", checks=False)
-                featIdx, _, _, _ = newtry_ms(kNeiAdj, self.cfg.pop, self.cfg.gen, init_dir)
-                featIdx = np.asarray(featIdx)
-                S0 = np.where(featIdx != 0)[0].astype(int)
-
-                # base eval on test
-                if S0.size == 0:
-                    acc0, red0 = 0.0, 0.0
+                # Build C_matrix if needed by either kshell rc_greedy or post buddy
+                need_C = ("buddy" in post_seq_modes) or ("rc_greedy" in kshell_seq_modes)
+                if need_C:
+                    ctx.C_matrix = compute_complementarity_matrix(
+                        ctx.trData, ctx.trLabel,
+                        acc_single=ctx.acc_single,
+                        n_neighbors=self.cfg.buddy_knn_k,
+                        cv=self.cfg.buddy_cv,
+                        use_cv=True,
+                        candidate_pairs=ctx.neigh_list,   # ✅ variable degree
+                        random_state=self.cfg.buddy_seed
+                    )
+                    C_cache[init_mode] = ctx.C_matrix
                 else:
-                    knn = KNeighborsClassifier(n_neighbors=self.cfg.knn_eval_k)
-                    knn.fit(ctx.trData[:, S0], ctx.trLabel)
-                    pred = knn.predict(ctx.teData[:, S0])
-                    acc0 = float(np.mean(pred == ctx.teLabel))
-                    red0 = float(redundancy_rate_subset(S0, ctx.zData))
-                time_base = prep_time + (perf_counter() - t_base0)
-                
-                if "normal" in seq_modes:
-                    key = f"{init_mode}__normal"
-                    metrics[key]["ACC"][r - 1] = acc0
-                    metrics[key]["FNUM"][r - 1] = int(S0.size)
-                    metrics[key]["RED"][r - 1] = red0
-                    metrics[key]["TIME"][r - 1] = time_base
+                    ctx.C_matrix = None
 
-                # seq_mode == buddy
-                if "buddy" in seq_modes:
-                    t_b0 = perf_counter()
+                for ks_mode in kshell_seq_modes:
+                    mode_dir = os.path.join(out_dir, f"run_{r:02d}", init_mode, f"ks_{ks_mode}")
+                    shutil.rmtree(mode_dir, ignore_errors=True)
+                    os.makedirs(mode_dir, exist_ok=True)
 
+                    t0 = perf_counter()
+
+                    # sync + set GG.kshell_seq_mode + rc_tau/max_add
+                    sync_context_to_GG(ctx, cfg=self.cfg, kshell_seq_mode=ks_mode)
+
+                    kNeiAdj = squareform(ctx.A_init, force="tovector", checks=False)
+                    featIdx, _, _, _ = newtry_ms(kNeiAdj, self.cfg.pop, self.cfg.gen, mode_dir)
+
+                    t_after_solver = perf_counter()
+                    solver_time = prep_time + (t_after_solver - t0)
+
+                    featIdx = np.asarray(featIdx)
+                    S0 = np.where(featIdx != 0)[0].astype(int)
+
+                    post_selected = {}
+
+                    # --- base test eval (normal post) ---
                     if S0.size == 0:
-                        accB, redB = 0.0, 0.0
-                        SB = S0
+                        acc_S0, red_S0 = 0.0, 0.0
                     else:
-                        # build C_matrix for this init_mode if not yet
-                        if init_mode not in C_cache:
-                            C_cache[init_mode] = compute_complementarity_matrix(
-                                ctx.trData, ctx.trLabel,
-                                acc_single=ctx.acc_single,
-                                n_neighbors=self.cfg.buddy_knn_k,
-                                cv=self.cfg.buddy_cv,
-                                use_cv=True,
-                                candidate_pairs=ctx.neigh_list,
-                                random_state=self.cfg.buddy_seed
-                            )
-                        C = C_cache[init_mode]
+                        knn0 = KNeighborsClassifier(n_neighbors=self.cfg.knn_eval_k)
+                        knn0.fit(ctx.trData[:, S0], ctx.trLabel)
+                        pred0 = knn0.predict(ctx.teData[:, S0])
+                        acc_S0 = float(np.mean(pred0 == ctx.teLabel))
+                        red_S0 = float(redundancy_rate_subset(S0, ctx.zData))
 
-                        SB, _ = buddy_sfs(
-                            ctx.trData, ctx.trLabel,
+                    for ps_mode in post_seq_modes:
+                        print(f"Run {r}/{RUNS}, Init: {init_mode}, SeqKShell: {ks_mode}, Post: {ps_mode}")
+                        key = f"{init_mode}__ks{ks_mode}__post{ps_mode}"
+
+                        t_post = perf_counter()
+
+                        ps = str(ps_mode).lower()
+
+                        S_post = apply_post_sequential(
                             S0=S0,
-                            C_matrix=C,
+                            mode=ps,
+                            X=ctx.trData,
+                            y=ctx.trLabel,
+                            C_matrix=C_cache.get(init_mode, ctx.C_matrix),
                             R_matrix=ctx.Zout,
-                            max_buddy_per_core=self.cfg.buddy_max_per_core,
-                            n_neighbors=self.cfg.buddy_knn_k,
-                            cv=self.cfg.buddy_cv,
-                            lam_red=self.cfg.buddy_lam_red
+                            buddy_kwargs=None
                         )
-                        SB = np.asarray(SB, dtype=int)
+                        S_post = np.asarray(S_post, dtype=int)
 
-                        if SB.size == 0:
-                            accB, redB = 0.0, 0.0
+                        # ---- Evaluate test acc + redundancy ----
+                        if S_post.size == 0:
+                            acc_post, red_post = 0.0, 0.0
                         else:
-                            knn2 = KNeighborsClassifier(n_neighbors=self.cfg.knn_eval_k)
-                            knn2.fit(ctx.trData[:, SB], ctx.trLabel)
-                            pred2 = knn2.predict(ctx.teData[:, SB])
-                            accB = float(np.mean(pred2 == ctx.teLabel))
-                            redB = float(redundancy_rate_subset(SB, ctx.zData))
+                            # reuse cached eval for normal (optional)
+                            if ps in ["normal", "none"] and np.array_equal(np.sort(S_post), np.sort(S0)):
+                                acc_post, red_post = acc_S0, red_S0
+                            else:
+                                knn = KNeighborsClassifier(n_neighbors=self.cfg.knn_eval_k)
+                                knn.fit(ctx.trData[:, S_post], ctx.trLabel)
+                                pred = knn.predict(ctx.teData[:, S_post])
+                                acc_post = float(np.mean(pred == ctx.teLabel))
+                                red_post = float(redundancy_rate_subset(S_post, ctx.zData))
 
-                    time_buddy = time_base + (perf_counter() - t_b0)
+                        post_extra_time = perf_counter() - t_post
+                        total_time = solver_time + post_extra_time
 
-                    key = f"{init_mode}__buddy"
-                    metrics[key]["ACC"][r - 1] = accB
-                    metrics[key]["FNUM"][r - 1] = int(SB.size)
-                    metrics[key]["RED"][r - 1] = redB
-                    metrics[key]["TIME"][r - 1] = time_buddy
+                        # ---- Store metrics ----
+                        metrics[key]["ACC"][r - 1] = acc_post
+                        metrics[key]["FNUM"][r - 1] = int(S_post.size)
+                        metrics[key]["RED"][r - 1] = red_post
+                        metrics[key]["TIME"][r - 1] = total_time
 
-                # store FSET for product (chosen combo)
-                if init_mode == self.cfg.log_mode:
-                    if self.cfg.log_seq_mode == "normal":
-                        chosen_set = S0
-                        chosen_acc = acc0
-                        chosen_red = red0
-                        chosen_time = time_base
-                    elif self.cfg.log_seq_mode == "buddy" and ("buddy" in seq_modes):
-                        chosen_set = SB
-                        chosen_acc = accB
-                        chosen_red = redB
-                        chosen_time = time_buddy
-                    else:
-                        chosen_set = S0
-                        chosen_acc = acc0
-                        chosen_red = red0
-                        chosen_time = time_base
+                        post_selected[ps_mode] = S_post
 
-                    FSET[r - 1] = chosen_set
-
-        # ===== ablation summary CSV =====
-        rows = []
-        for i in range(RUNS):
-            row = {"run": i + 1}
-            for key in combo_keys:
-                row[f"acc_{key}"]  = float(metrics[key]["ACC"][i])
-                row[f"fnum_{key}"] = float(metrics[key]["FNUM"][i])
-                row[f"red_{key}"]  = float(metrics[key]["RED"][i])
-                row[f"time_{key}"] = float(metrics[key]["TIME"][i])
-            rows.append(row)
-
-        row_mean = {"run": "mean"}
-        row_std  = {"run": "std"}
-        for key in combo_keys:
-            row_mean[f"acc_{key}"]  = float(metrics[key]["ACC"].mean())
-            row_mean[f"fnum_{key}"] = float(metrics[key]["FNUM"].mean())
-            row_mean[f"red_{key}"]  = float(metrics[key]["RED"].mean())
-            row_mean[f"time_{key}"] = float(metrics[key]["TIME"].mean())
-
-            row_std[f"acc_{key}"]  = float(metrics[key]["ACC"].std())
-            row_std[f"fnum_{key}"] = float(metrics[key]["FNUM"].std())
-            row_std[f"red_{key}"]  = float(metrics[key]["RED"].std())
-            row_std[f"time_{key}"] = float(metrics[key]["TIME"].std())
-
-        rows += [row_mean, row_std]
-        df = pd.DataFrame(rows)
-        df.to_csv(os.path.join(out_dir, "ablation_summary.csv"), index=False)
-
-        # ===== product output (format cũ) from chosen combo =====
-        log_key = f"{self.cfg.log_mode}__{self.cfg.log_seq_mode}"
-        if log_key not in metrics:
-            # fallback: use log_mode__normal
-            log_key = f"{self.cfg.log_mode}__normal"
-
-        ACC = np.concatenate([metrics[log_key]["ACC"], [metrics[log_key]["ACC"].mean(), metrics[log_key]["ACC"].std()]])
-        FNUM = np.concatenate([metrics[log_key]["FNUM"], [metrics[log_key]["FNUM"].mean(), metrics[log_key]["FNUM"].std()]])
-        RED = np.concatenate([metrics[log_key]["RED"], [metrics[log_key]["RED"].mean(), metrics[log_key]["RED"].std()]])
-        T   = np.concatenate([metrics[log_key]["TIME"], [metrics[log_key]["TIME"].mean(), metrics[log_key]["TIME"].std()]])
-
-        product = []
-        for i in range(RUNS + 2):
-            product.append([ACC[i], FNUM[i], FSET[i], RED[i], T[i]])
-
-        return product, ctx.dataset_name
+                    # ---- store FSET for product (chosen combo) ----
+                    if (init_mode == self.cfg.log_init_mode) and (ks_mode == self.cfg.log_kshell_seq_mode):
+                        chosen = post_selected.get(self.cfg.log_post_seq_mode, S0)
+                        FSET[r - 1] = chosen

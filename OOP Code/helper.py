@@ -5,6 +5,9 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score
 
 def _mapminmax_zero_one(X):
     """
@@ -254,3 +257,145 @@ def plot_knn_graph_with_selected(neighbors, edge_mask,
     out_path = os.path.join(run_dir, fname)
     plt.savefig(out_path, dpi=300)
     plt.close()
+
+
+def compute_complementarity_matrix(
+    X, y, acc_single,
+    n_neighbors=5,
+    cv=5,
+    use_cv=True,
+    candidate_pairs=None,
+    random_state=0
+):
+    """
+    C_ij = max(0, acc({i,j}) - max(acc({i}), acc({j})))
+
+    candidate_pairs hỗ trợ 3 dạng:
+      (1) None -> tính full (i<j)
+      (2) kNeiMatrix: np.ndarray shape (n_features, max_k)
+      (3) neigh_list: list/tuple length n_features, neigh_list[i] là iterable các neighbor của i (ragged)
+      (4) list/array các cặp (i,j) shape (n_pairs, 2)
+    """
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y)
+    n_samples, n_features = X.shape
+
+    knn = KNeighborsClassifier(n_neighbors=n_neighbors)
+    C = np.zeros((n_features, n_features), dtype=float)
+
+    def pair_acc(i, j):
+        Xij = X[:, [i, j]]
+        if use_cv:
+            skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
+            scores = []
+            for tr, te in skf.split(Xij, y):
+                knn.fit(Xij[tr], y[tr])
+                pred = knn.predict(Xij[te])
+                scores.append(accuracy_score(y[te], pred))
+            return float(np.mean(scores))
+        else:
+            knn.fit(Xij, y)
+            pred = knn.predict(Xij)
+            return float(accuracy_score(y, pred))
+
+    # ---- build a unique undirected pair set {(a,b), a<b} ----
+    pairs = set()
+
+    if candidate_pairs is None:
+        for i in range(n_features):
+            for j in range(i + 1, n_features):
+                pairs.add((i, j))
+
+    else:
+        # case (2): fixed kNeiMatrix
+        if isinstance(candidate_pairs, np.ndarray) and candidate_pairs.ndim == 2:
+            kNeiMatrix = np.asarray(candidate_pairs, dtype=int)
+            assert kNeiMatrix.shape[0] == n_features, "kNeiMatrix rows must equal n_features"
+            for i in range(n_features):
+                for j in kNeiMatrix[i]:
+                    j = int(j)
+                    if j < 0 or j >= n_features or j == i:
+                        continue
+                    a, b = (i, j) if i < j else (j, i)
+                    pairs.add((a, b))
+
+        # case (3): neigh_list (ragged)
+        elif isinstance(candidate_pairs, (list, tuple)) and len(candidate_pairs) == n_features:
+            neigh_list = candidate_pairs
+            for i in range(n_features):
+                for j in neigh_list[i]:
+                    j = int(j)
+                    if j < 0 or j >= n_features or j == i:
+                        continue
+                    a, b = (i, j) if i < j else (j, i)
+                    pairs.add((a, b))
+
+        # case (4): list of explicit pairs
+        else:
+            arr = np.asarray(candidate_pairs, dtype=int)
+            if arr.ndim != 2 or arr.shape[1] != 2:
+                raise ValueError("candidate_pairs must be None, kNeiMatrix (n,k), neigh_list (len=n), or (n_pairs,2).")
+            for i, j in arr:
+                i = int(i); j = int(j)
+                if i < 0 or i >= n_features or j < 0 or j >= n_features or i == j:
+                    continue
+                a, b = (i, j) if i < j else (j, i)
+                pairs.add((a, b))
+
+    # ---- compute complementarity only on selected pairs ----
+    for (i, j) in pairs:
+        acc_ij = pair_acc(i, j)
+        base = max(acc_single[i], acc_single[j])
+        c_ij = max(0.0, acc_ij - base)
+        C[i, j] = C[j, i] = c_ij
+
+    np.fill_diagonal(C, 0.0)
+    return C
+
+def compute_single_feature_accuracy(X, y, n_neighbors=5, cv=5, use_cv=True, random_state=0):
+    """
+    Tính acc_single[i] cho từng feature i:
+        - Nếu use_cv=True: dùng StratifiedKFold CV trên X[:, [i]]
+        - Nếu use_cv=False: fit + predict trên cùng data (nhanh nhưng lạc quan)
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n_samples, n_features)
+    y : np.ndarray, shape (n_samples,)
+    n_neighbors : int
+        Số lân cận trong KNN.
+    cv : int
+        Số fold trong cross-validation.
+    use_cv : bool
+        True -> dùng CV, False -> dùng apparent accuracy (train=eval).
+    random_state : int
+
+    Returns
+    -------
+    acc_single : np.ndarray, shape (n_features,)
+    """
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y)
+    n_samples, n_features = X.shape
+
+    knn = KNeighborsClassifier(n_neighbors=n_neighbors)
+    acc_single = np.zeros(n_features, dtype=float)
+
+    if use_cv:
+        skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
+        for i in range(n_features):
+            Xi = X[:, [i]]
+            scores = []
+            for train_idx, test_idx in skf.split(Xi, y):
+                knn.fit(Xi[train_idx], y[train_idx])
+                pred = knn.predict(Xi[test_idx])
+                scores.append(accuracy_score(y[test_idx], pred))
+            acc_single[i] = float(np.mean(scores))
+    else:
+        for i in range(n_features):
+            Xi = X[:, [i]]
+            knn.fit(Xi, y)
+            pred = knn.predict(Xi)
+            acc_single[i] = float(accuracy_score(y, pred))
+
+    return acc_single

@@ -34,6 +34,40 @@ class InitParams:
     extra_k: int = 2
 
 @dataclass
+class KShellParams:
+    max_add: int = 5
+    rc_tau: float = 0.3
+
+@dataclass
+class BuddyParams:
+    max_per_core: int = 1
+    lam_red: float = 0.5
+    cv: int = 5
+    knn_k: int = 5
+    seed: int = 42
+
+@dataclass
+class EvalParams:
+    test_size: float = 0.3
+    split_seed: int = 42
+    knn_eval_k: int = 5
+
+@dataclass
+class LogParams:
+    enabled: bool = True
+
+    log_only_selected_combo: bool = False
+
+    export_init_graph: bool = True        # A_init.npy + neighbors.json
+    export_solver_meta: bool = True       # solver_meta.json + S0_selected + kNeigh_chosen
+    export_solver_logs: bool = True       # pop_metrics.csv + gen_XXX.csv
+    export_post_logs: bool = True         # post_x/selected_features + post_metrics.json
+    export_plots: bool = False            # gọi plot_knn_graph_with_selected
+
+    keep_run_logs_in_memory: bool = False # nếu False: GG.run_logs[log_id] sẽ pop sau khi export
+
+
+@dataclass
 class ExperimentConfig:
     runs: int = 10
     test_size: float = 0.3
@@ -55,17 +89,10 @@ class ExperimentConfig:
     log_post_seq_mode: str = "normal"
 
     init_params: InitParams = field(default_factory=InitParams)
-
-    # ===== K-shell sequential params =====
-    kshell_max_add: int = 5
-    kshell_rc_tau: float = 0.3
-
-    # ===== buddy sequential after GBFS =====
-    buddy_max_per_core: int = 1
-    buddy_lam_red: float = 0.5
-    buddy_cv: int = 5
-    buddy_knn_k: int = 5
-    buddy_seed: int = 42
+    kshell_params: KShellParams = field(default_factory=KShellParams)
+    buddy_params: BuddyParams = field(default_factory=BuddyParams)
+    eval_params: EvalParams = field(default_factory=EvalParams)
+    log_params: LogParams = field(default_factory=LogParams)
 
 @dataclass
 class GraphInitResult:

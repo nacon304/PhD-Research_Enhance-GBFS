@@ -79,11 +79,10 @@ def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
     # 1) Chọn nghiệm "best" như cũ
     # -----------------------------
     alpha = 0.9
-    obj1 = np.abs(obj_part[:, 0])  # f(1)  (tuỳ định nghĩa của bạn)
+    obj1 = obj_part[:, 0]          # f(1)  (tuỳ định nghĩa của bạn)
     obj2 = obj_part[:, 1]          # f(2) = số feature (hoặc cái gì đó)
-    n_feat = GG.featNum
 
-    fits = alpha * obj1 + (1 - alpha) * (1 - obj2 / n_feat)
+    fits = alpha * (1 - obj1) + (1 - alpha) * (1 - obj2)
     idx_best = np.argmax(fits)
     featidx_best = feat_part[idx_best, :]
     kNeigh_best = kNeigh_part[idx_best, :]

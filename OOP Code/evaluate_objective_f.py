@@ -25,10 +25,10 @@ def evaluate_objective_f_internal(featIdx):
         plabel = knn.predict(X_test)
 
         acc = np.mean(plabel == y_test)
-        F1.append(-acc)
+        F1.append(1-acc)
 
     f1 = float(np.mean(F1))
-    f2 = float(len(featIdx))
+    f2 = float(len(featIdx) / GG.featNum)
     return np.array([f1, f2], dtype=float)
 
 def evaluate_objective_f(M, individual_adj):
@@ -55,7 +55,7 @@ def evaluate_objective_f(M, individual_adj):
         f_2 = evaluate_objective_f_internal(featIdx_ext)
 
         def score(fv):
-            return abs(fv[0]) * 0.9 + 0.1 * fv[1] / GG.featNum
+            return (1 - fv[0]) * 0.9 + 0.1 * fv[1]
 
         if score(f_1) < score(f_2):
             featIdx = featIdx_core

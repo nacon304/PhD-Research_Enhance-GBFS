@@ -23,8 +23,8 @@ def sync_context_to_GG(ctx, cfg=None, kshell_seq_mode=None):
     GG.C_matrix = getattr(ctx, "C_matrix", None)
 
     if cfg is not None:
-        GG.kshell_max_add = int(cfg.kshell_max_add)
-        GG.rc_tau = float(cfg.kshell_rc_tau)
+        GG.kshell_max_add = int(cfg.kshell_params.max_add)
+        GG.rc_tau = float(cfg.kshell_params.rc_tau)
 
     if kshell_seq_mode is not None:
         GG.kshell_seq_mode = kshell_seq_mode

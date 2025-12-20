@@ -1,8 +1,8 @@
-from oop_core import ExperimentConfig, InitParams
+from oop_core import ExperimentConfig, InitParams, KShellParams, BuddyParams, EvalParams, LogParams
 from runner_oop import GBFSRunner
 
 cfg = ExperimentConfig(
-    runs=3,
+    runs=30,
     pop=20,
     gen=50,
 
@@ -10,18 +10,9 @@ cfg = ExperimentConfig(
     kshell_seq_modes=["normal", "rc_greedy"],
     post_seq_modes=["normal", "buddy"],
 
-    kshell_max_add=5,
-    kshell_rc_tau=0.3,
-
     log_init_mode="probabilistic",
     log_kshell_seq_mode="rc_greedy",
     log_post_seq_mode="buddy",
-
-    buddy_max_per_core=1,
-    buddy_lam_red=0.5,
-    buddy_cv=5,
-    buddy_knn_k=5,
-    buddy_seed=42,
 
     init_params=InitParams(
         k_neigh=5,
@@ -30,6 +21,36 @@ cfg = ExperimentConfig(
         extra_k=2,
         beta=2.0,
         seed=42,
+    ),
+
+    kshell_params=KShellParams(
+        max_add=5,
+        rc_tau=0.3,
+    ),
+
+    buddy_params=BuddyParams(
+        max_per_core=1,
+        lam_red=0.5,
+        cv=5,
+        knn_k=5,
+        seed=42,
+    ),
+
+    eval_params=EvalParams(
+        test_size=0.3,
+        split_seed=42,
+        knn_eval_k=5,
+    ),
+
+    log_params=LogParams(
+        enabled=True,
+        log_only_selected_combo=False,   # True nếu chỉ muốn export log nặng cho combo log_*
+        export_init_graph=True,
+        export_solver_meta=True,
+        export_solver_logs=True,
+        export_post_logs=True,
+        export_plots=False,
+        keep_run_logs_in_memory=False,
     )
 )
 

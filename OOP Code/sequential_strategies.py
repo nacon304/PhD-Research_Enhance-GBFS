@@ -157,33 +157,25 @@ def apply_post_sequential(
     -------
     S_post : np.ndarray (sorted int)
     """
-    if S0 is None:
-        return np.array([], dtype=int)
-
+    mode = (mode or "normal").lower()
     S0 = np.asarray(S0, dtype=int).ravel()
-    if S0.size == 0:
-        return S0
-
-    if mode is None:
-        mode = "normal"
-    mode = str(mode).lower()
 
     if mode in ["normal", "none"]:
-        return np.array(sorted(S0), dtype=int)
+        return S0
 
     if mode == "buddy":
         if C_matrix is None or R_matrix is None:
-            raise ValueError("apply_post_sequential(mode='buddy') needs C_matrix and R_matrix.")
+            raise ValueError("apply_post_sequential(buddy): need C_matrix and R_matrix.")
         if buddy_kwargs is None:
             buddy_kwargs = {}
 
-        S_buddy, _ = buddy_sfs(
+        SB, _ = buddy_sfs(
             X, y,
             S0=S0,
             C_matrix=C_matrix,
             R_matrix=R_matrix,
             **buddy_kwargs
         )
-        return np.asarray(S_buddy, dtype=int).ravel()
+        return np.asarray(SB, dtype=int).ravel()
 
-    raise ValueError(f"Unknown post sequential mode: {mode}")
+    raise ValueError(f"Unknown post mode: {mode}")

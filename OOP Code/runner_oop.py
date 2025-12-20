@@ -16,59 +16,18 @@ from helper import (
     compute_single_feature_accuracy,
     compute_complementarity_matrix,
     plot_knn_graph_with_selected,
+    _safe_mkdir,
+    _save_neighbors_json,
+    _export_legacy_solver_logs,
+    _save_selected_txt,
+    _dump_post_metrics_json,
 )
 from sequential_strategies import apply_post_sequential
 
 from newtry_ms import newtry_ms
 from oop_core import ExperimentConfig, get_initializer
 from gg_adapter import sync_context_to_GG
-import json
 import gbfs_globals as GG
-
-def _safe_mkdir(p):
-    os.makedirs(p, exist_ok=True)
-
-def _save_neighbors_json(neigh_list, path_json):
-    serial = []
-    for arr in neigh_list:
-        arr = np.asarray(arr, dtype=int).ravel().tolist()
-        serial.append(arr)
-    with open(path_json, "w", encoding="utf-8") as f:
-        json.dump(serial, f, ensure_ascii=False, indent=2)
-
-def _save_selected_txt(S, path_txt):
-    S = np.asarray(S, dtype=int).ravel()
-    with open(path_txt, "w", encoding="utf-8") as f:
-        f.write(" ".join(map(str, S.tolist())))
-
-def _export_legacy_solver_logs(run_dir, gg_logs: dict):
-    """
-    Export giống code cũ:
-      - pop_metrics.csv
-      - gen_XXX.csv cho từng pareto front
-    """
-    pop_rows = gg_logs.get("pop_metrics", [])
-    if pop_rows:
-        df_pop = pd.DataFrame(pop_rows)
-        df_pop.to_csv(os.path.join(run_dir, "pop_metrics.csv"), index=False)
-
-    pareto_list = gg_logs.get("pareto_fronts", [])
-    for entry in pareto_list:
-        gen = entry.get("gen", None)
-        df = entry.get("df", None)
-        if df is None:
-            continue
-        if not isinstance(df, pd.DataFrame):
-            df = pd.DataFrame(df)
-        if gen is None:
-            csv_name = os.path.join(run_dir, f"gen_unknown.csv")
-        else:
-            csv_name = os.path.join(run_dir, f"gen_{int(gen):03d}.csv")
-        df.to_csv(csv_name, index=False)
-
-def _dump_post_metrics_json(path_json, payload: dict):
-    with open(path_json, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
 
 @dataclass
 class GBFSContext:

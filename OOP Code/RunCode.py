@@ -54,7 +54,7 @@ cfg = ExperimentConfig(
     )
 )
 
-runner = GBFSRunner(cfg, visual_root="D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Visualize Implementation Final")
+runner = GBFSRunner(cfg, visual_root="D:/PhD/The First Paper/Code Implement/GBFS-SND/Evaluation/Visualize Implementation Final v2")
 product, name = runner.run_dataset(1)
 print("Dataset:", name)
 for row in product:

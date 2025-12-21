@@ -1,31 +1,3 @@
-# analyze_compare_results.py
-# ------------------------------------------------------------
-# Read (from OUT_ROOT):
-#   OUT_ROOT/compare_front_train.csv
-#   OUT_ROOT/compare_test_points.csv
-#
-# PLUS (optional, for ALL GBFS variants):
-#   OUT_ROOT/dataset_XX/gbfs_enhanced/XX/ablation_summary.csv
-#   OUT_ROOT/dataset_XX/gbfs_baseline/XX/ablation_summary.csv   (optional)
-#   OUT_ROOT/dataset_XX/gbfs_enhanced/XX/run_*/<init>/ks_*/gen_*.csv
-#   OUT_ROOT/dataset_XX/gbfs_baseline/XX/run_*/<init>/ks_*/gen_*.csv (optional)
-#
-# Write (to OUT_ROOT/analysis_results):
-#   - summary_train_hv_igd_dataset_XX.csv
-#   - summary_test_dataset_XX.csv
-#   - summary_joined_dataset_XX.csv
-#   - summary_joined_by_base_dataset_XX.csv
-#   - front_medianHV_dataset_XX.png
-#   - summary_train_hv_igd.csv
-#   - summary_test.csv
-#   - summary_joined.csv
-#   - summary_joined_by_base.csv
-#
-# PLOT PATCH:
-#   - ALL GBFS_enhanced methods: different colors, alpha=1.0
-#   - ALL others (including baseline + traditional): alpha=0.7
-# ------------------------------------------------------------
-
 from __future__ import annotations
 
 import os
@@ -33,18 +5,13 @@ import re
 import glob
 import hashlib
 import numpy as np
-
-try:
-    import pandas as pd
-except ImportError as e:
-    raise ImportError("Please install pandas: pip install pandas") from e
+import pandas as pd
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-
 # =========================
-# USER CONFIG
+# CONFIG
 # =========================
 OUT_ROOT = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Compare\Results"
 
@@ -57,9 +24,8 @@ TEST_CSV  = os.path.join(OUT_ROOT, "compare_test_points.csv")
 INJECT_GBFS_FROM_FOLDERS = True
 
 HV_REF = (1.0, 1.0)
-IGD_P = 2  # Euclidean
+IGD_P = 2
 
-# Plot tuning
 PLOT_FIGSIZE = (10, 6)
 LEGEND_FONTSIZE = 8
 LEGEND_OUTSIDE = True
@@ -76,7 +42,6 @@ def _as_float_array(x) -> np.ndarray:
 
 
 def nondominated_2d_min(fr: np.ndarray, er: np.ndarray, eps: float = 1e-12):
-    """Non-dominated set for 2D minimization (fr, er). Returns sorted by fr asc."""
     fr = _as_float_array(fr)
     er = _as_float_array(er)
     if fr.size == 0:
@@ -112,7 +77,6 @@ def nondominated_2d_min(fr: np.ndarray, er: np.ndarray, eps: float = 1e-12):
 
 
 def _hv_max2d(xs: np.ndarray, ys: np.ndarray) -> float:
-    """HV for 2D maximization with reference (0,0). Assumes x,y>0."""
     xs = _as_float_array(xs)
     ys = _as_float_array(ys)
     pts = np.column_stack([xs, ys])
@@ -149,7 +113,6 @@ def _hv_max2d(xs: np.ndarray, ys: np.ndarray) -> float:
 
 
 def hypervolume_min2d(fr: np.ndarray, er: np.ndarray, ref=(1.0, 1.0)) -> float:
-    """HV for 2D minimization with reference ref=(fRef,eRef)."""
     fr = _as_float_array(fr)
     er = _as_float_array(er)
     if fr.size == 0:
@@ -161,7 +124,6 @@ def hypervolume_min2d(fr: np.ndarray, er: np.ndarray, ref=(1.0, 1.0)) -> float:
 
 def igd_min2d(front_fr: np.ndarray, front_er: np.ndarray,
               ref_fr: np.ndarray, ref_er: np.ndarray, p: int = 2) -> float:
-    """IGD: avg over ref points distance to nearest approx point."""
     front_fr = _as_float_array(front_fr)
     front_er = _as_float_array(front_er)
     ref_fr   = _as_float_array(ref_fr)
@@ -177,11 +139,6 @@ def igd_min2d(front_fr: np.ndarray, front_er: np.ndarray,
     dist = np.linalg.norm(diff, ord=p, axis=2)
     dmin = np.min(dist, axis=1)
     return float(np.mean(dmin))
-
-
-# =========================
-# Style helpers
-# =========================
 
 def _stable_int(s: str) -> int:
     h = hashlib.md5(s.encode("utf-8")).hexdigest()
@@ -205,7 +162,6 @@ def _muted_color_cycle():
 
 
 def _enhanced_color_cycle():
-    # bright-ish palette for enhanced (distinct colors)
     return [
         "tab:red", "tab:orange", "tab:green", "tab:blue", "tab:purple",
         "tab:brown", "tab:pink", "tab:olive", "tab:cyan", "tab:gray",
@@ -224,14 +180,13 @@ def _build_other_method_style_map(methods: list[str]) -> dict[str, dict]:
             marker=markers[i % len(markers)],
             linewidth=1.7,
             markersize=4,
-            alpha=0.7,   # <<< ALL non-enhanced should be 0.7
+            alpha=0.7,
             zorder=2,
         )
     return mp
 
 
 def _build_enhanced_color_map(methods: list[str]) -> dict[str, str]:
-    """Assign each enhanced method a distinct color (deterministic by sorted order)."""
     enh = sorted([m for m in methods if _method_category(m) == "enhanced"])
     palette = _enhanced_color_cycle()
     mp: dict[str, str] = {}
@@ -243,11 +198,6 @@ def _build_enhanced_color_map(methods: list[str]) -> dict[str, str]:
 def _style_for_train(method_train: str,
                      other_map: dict[str, dict],
                      enhanced_color_map: dict[str, str]) -> dict:
-    """
-    Requirement:
-      - enhanced: alpha=1.0 and different colors per method
-      - all others (baseline + other): alpha=0.7
-    """
     cat = _method_category(method_train)
 
     if cat == "enhanced":
@@ -255,14 +205,13 @@ def _style_for_train(method_train: str,
         return dict(color=col, linewidth=2.6, alpha=1.0, zorder=20)
 
     if cat == "baseline":
-        # baseline is NOT enhanced -> fade
         return dict(color="deepskyblue", linewidth=2.4, alpha=0.7, zorder=12)
 
     st = other_map.get(method_train, dict(color="0.45", linewidth=1.7, alpha=0.7, zorder=2))
     return dict(
         color=st["color"],
         linewidth=st.get("linewidth", 1.7),
-        alpha=0.7,                 # <<< force 0.7 for all non-enhanced
+        alpha=0.7,
         zorder=st.get("zorder", 2)
     )
 
@@ -304,7 +253,7 @@ def _fmt(mean: float, std: float, nd: int = 3) -> str:
 
 
 # =========================
-# Folder ingest: GBFS test ablation + GBFS train gen_*.csv
+# Folder ingest
 # =========================
 
 def _dataset_folder(ds: int) -> str:
@@ -550,7 +499,7 @@ def _inject_gbfs(df_tr: pd.DataFrame, df_te: pd.DataFrame) -> tuple[pd.DataFrame
 
 
 # =========================
-# Main analysis
+# Main
 # =========================
 
 def main():
@@ -602,7 +551,6 @@ def main():
         ref_fr, ref_er = nondominated_2d_min(fr_all, er_all)
         print(f"Reference front size (TRAIN, global ND): {len(ref_fr)}")
 
-        # per (method, run)
         records = []
         grouped = df_tr_ds.groupby(["method", "run"], dropna=False)
 
@@ -646,7 +594,6 @@ def main():
             print("No train metrics computed.")
             continue
 
-        # summary train
         agg = df_metrics.groupby("method").agg(
             hv_mean=("hv_train", "mean"),
             hv_std=("hv_train", "std"),
@@ -668,9 +615,6 @@ def main():
         all_summary_train.append(agg)
         print(f"Saved: {out_train_summary}")
 
-        # --------------------------
-        # TEST summary
-        # --------------------------
         df_te_ds = df_te[df_te["dataset_idx"] == ds].copy()
 
         df_test_sum = pd.DataFrame()
@@ -764,9 +708,6 @@ def main():
             all_summary_join_base.append(joined_base)
             print(f"Saved: {out_join_base}")
 
-        # --------------------------
-        # Plot: median-HV run per TRAIN method
-        # --------------------------
         chosen = []
         for m, gm in df_metrics.groupby("method"):
             hv_arr = gm["hv_train"].to_numpy(dtype=float)
@@ -834,14 +775,12 @@ def main():
 
             st = _style_for_train(method_train, other_map, enhanced_color_map)
 
-            # line
             plt.plot(fr_nd, er_nd, color=st["color"], linewidth=st["linewidth"], alpha=st["alpha"], zorder=st["zorder"])
-            # points
             plt.scatter(
                 fr_nd, er_nd,
                 s=55 if _method_category(method_train) in ["enhanced", "baseline"] else 20,
                 c=st["color"],
-                alpha=st["alpha"],                    # <<< IMPORTANT
+                alpha=st["alpha"],
                 edgecolors="black" if _method_category(method_train) in ["enhanced", "baseline"] else st["color"],
                 linewidths=0.8 if _method_category(method_train) in ["enhanced", "baseline"] else 0.0,
                 zorder=st["zorder"] + 1,
@@ -902,7 +841,6 @@ def main():
         plt.close()
         print(f"Saved: {fig_path}")
 
-    # ---- global summaries
     if all_summary_train:
         df_all_train = pd.concat(all_summary_train, ignore_index=True)
         p = os.path.join(OUT_DIR, "summary_train_hv_igd.csv")

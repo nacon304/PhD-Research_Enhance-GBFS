@@ -1,4 +1,3 @@
-# runner_oop.py
 import os, shutil
 import numpy as np
 import pandas as pd
@@ -47,7 +46,6 @@ class GBFSContext:
     vWeight: np.ndarray
     vWeight1: np.ndarray
 
-    # will be set per init mode
     A_init: np.ndarray = None
     neigh_list: list = None
 

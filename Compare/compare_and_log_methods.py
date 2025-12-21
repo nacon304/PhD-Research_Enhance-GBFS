@@ -1,23 +1,3 @@
-# TRAIN:
-#   - Score-based methods: ratios 0.1 -> 0.9, evaluate TRAIN by CV
-#   - GBFS baseline/enhanced: take solver Pareto masks -> evaluate TRAIN by CV
-#
-# TEST:
-#   - GBFS baseline/enhanced: ONLY selected-best subset (as your pipeline)
-#   - Score-based methods: (1) ratios 0.1 -> 0.9, (2) k_ref = |S_enhanced|
-#
-# Outputs:
-#   OUT_ROOT/compare_front_train.csv
-#   OUT_ROOT/compare_test_points.csv
-#
-# Key fixes vs v4:
-#   (1) CSV writer unions all keys across rows (no "score_time" crash)
-#   (2) Hard isolation between OOP_ROOT and BASELINE_ROOT via purge+rebind
-#       to prevent module-cache collisions (decodeNet / initialize_variables_f / etc.)
-#   (3) Sanitizes complex-valued scores from traditional/graph methods
-#       to avoid "Casting complex values..." warning
-# ---------------------------------------------------------
-
 from __future__ import annotations
 
 import os
@@ -38,14 +18,14 @@ from sklearn.preprocessing import StandardScaler
 
 import warnings
 
-warnings.filterwarnings(
-    "error",
-    message=r".*Casting complex values to real discards the imaginary part.*",
-)
-# =========================================================
-# 0) USER CONFIG
-# =========================================================
+# warnings.filterwarnings(
+#     "error",
+#     message=r".*Casting complex values to real discards the imaginary part.*",
+# )
 
+# =========================================================
+# CONFIG
+# =========================================================
 BASELINE_ROOT = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Python Code"
 OOP_ROOT      = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\OOP Code"
 OUT_ROOT      = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Compare\Results Debug"
@@ -66,8 +46,6 @@ BASE_OMEGA = 0.8
 BASE_KNEIGH = 5
 BASE_POP = 20
 BASE_GEN = 50
-# BASE_POP = 1
-# BASE_GEN = 1
 
 RATIOS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
@@ -75,7 +53,7 @@ SILENCE_WARNINGS = False
 
 
 # =========================================================
-# 1) BASIC UTILITIES
+# UTILITIES
 # =========================================================
 
 def _ensure_dir(p: str) -> None:
@@ -92,11 +70,6 @@ def _write_text(path: str, s: str) -> None:
         f.write(s)
 
 def _write_csv(path: str, rows: List[Dict[str, Any]], fieldnames: Optional[List[str]] = None) -> None:
-    """
-    Robust CSV writer:
-      - unions all keys across all rows so DictWriter never crashes
-      - keeps first-seen column order
-    """
     _ensure_dir(os.path.dirname(path))
     if not rows:
         return
@@ -117,7 +90,6 @@ def _write_csv(path: str, rows: List[Dict[str, Any]], fieldnames: Optional[List[
 
 def _mapminmax_zero_one(X: np.ndarray) -> np.ndarray:
     X = np.asarray(X)
-    # if anything becomes complex due to upstream numeric issues, force to real safely
     if np.iscomplexobj(X):
         X = np.real(X)
     X = np.asarray(X, dtype=float)
@@ -174,17 +146,9 @@ def _knn_acc_test(Xtr: np.ndarray, ytr: np.ndarray, Xte: np.ndarray, yte: np.nda
     return float(np.mean(pred == yte))
 
 def _red(S: np.ndarray, zData_full: np.ndarray) -> float:
-    # always use fallback here to avoid helper collision across roots
     return float(_redundancy_rate_subset_fallback(S, zData_full))
 
 def _sanitize_scores(s: np.ndarray, mode: str = "abs") -> np.ndarray:
-    """
-    Convert any score array to a finite real-valued 1D float array.
-
-    mode:
-      - "abs": use magnitude for complex (recommended for stable ranking)
-      - "real": drop imaginary part
-    """
     s = np.asarray(s).ravel()
 
     if np.iscomplexobj(s):
@@ -196,14 +160,13 @@ def _sanitize_scores(s: np.ndarray, mode: str = "abs") -> np.ndarray:
 
 
 # =========================================================
-# 2) COLLISION CONTROL (CRITICAL)
+# COLLISION CONTROL
 # =========================================================
 
 if SILENCE_WARNINGS:
     warnings.filterwarnings("ignore")
 
 _PROJECT_NAMES = [
-    # high collision (appears in both roots)
     "gbfs_globals",
     "myinputdatasetXD",
     "fisherScore",
@@ -248,10 +211,6 @@ def _purge_module_names(names: List[str]) -> None:
             del sys.modules[n]
 
 def _enter_runtime(primary_root: str, secondary_root: Optional[str] = None) -> None:
-    """
-    Make runtime imports resolve ONLY to `primary_root`, and aggressively purge cached
-    modules from both roots + known project module names to avoid cross-root collisions.
-    """
     if secondary_root:
         _purge_modules_from_root(secondary_root)
     _purge_modules_from_root(primary_root)
@@ -263,7 +222,7 @@ def _import(name: str):
 
 
 # =========================================================
-# 3) ROW BUILDERS
+# ROW BUILDERS
 # =========================================================
 
 def _front_train_rows(
@@ -355,7 +314,7 @@ def _test_point_row(
 
 
 # =========================================================
-# 4) GBFS BASELINE
+# GBFS BASELINE
 # =========================================================
 
 def run_gbfs_baseline_one_run(
@@ -378,7 +337,6 @@ def run_gbfs_baseline_one_run(
     run_dir = os.path.join(out_dir, f"run_{run_id:02d}")
     _ensure_dir(run_dir)
 
-    # ---- hard bind baseline runtime to avoid OOP collisions
     _enter_runtime(BASELINE_ROOT, secondary_root=OOP_ROOT)
 
     GG = _import("gbfs_globals")
@@ -510,7 +468,7 @@ def run_gbfs_baseline_one_run(
 
 
 # =========================================================
-# 5) GBFS ENHANCED (OOP)
+# GBFS ENHANCED (OOP)
 # =========================================================
 
 def run_gbfs_enhanced_oop(
@@ -522,10 +480,8 @@ def run_gbfs_enhanced_oop(
     enhanced_root = os.path.join(dataset_dir, "gbfs_enhanced")
     _ensure_dir(enhanced_root)
 
-    # ---- hard bind OOP runtime to avoid baseline collisions
     _enter_runtime(OOP_ROOT, secondary_root=BASELINE_ROOT)
 
-    # Import OOP stack fresh
     oop_core = _import("oop_core")
     runner_oop_mod = _import("runner_oop")
     myinput = _import("myinputdatasetXD").myinputdatasetXD
@@ -538,7 +494,6 @@ def run_gbfs_enhanced_oop(
     LogParams = oop_core.LogParams
     GBFSRunner = runner_oop_mod.GBFSRunner
 
-    # Patch runner_oop.newtry_ms to save pareto masks/objs to disk
     _ORIG_OOP_NEWTRY = runner_oop_mod.newtry_ms
 
     def _patched_oop_newtry(*args, **kwargs):
@@ -617,7 +572,6 @@ def run_gbfs_enhanced_oop(
         asdict(cfg),
     )
 
-    # rebuild split + zData for CV/red (use OOP dataset loader)
     dataset, labels, _ = myinput(int(dataset_idx))
     X_raw = np.asarray(dataset[:, 1:], dtype=float)
     y = np.asarray(labels, dtype=int).ravel()
@@ -641,7 +595,6 @@ def run_gbfs_enhanced_oop(
         combo_dir = os.path.join(enhanced_root, f"{dataset_idx:02d}", f"run_{r:02d}", init_mode, f"ks_{ks_mode}")
         post_dir  = os.path.join(combo_dir, f"post_{post_mode}")
 
-        # TRAIN front from pareto_masks.npy (patched)
         pm_path = os.path.join(combo_dir, "pareto_masks.npy")
         fsets: List[np.ndarray] = []
         if os.path.exists(pm_path):
@@ -676,7 +629,6 @@ def run_gbfs_enhanced_oop(
         )
         front_rows_all.extend(front_rows)
 
-        # TEST summary from post_metrics.json + selected_features.txt
         pm_json = os.path.join(post_dir, "post_metrics.json")
         sel_txt = os.path.join(post_dir, "selected_features.txt")
 
@@ -736,7 +688,7 @@ def run_gbfs_enhanced_oop(
 
 
 # =========================================================
-# 6) SCORE-BASED METHODS
+# SCORE-BASED METHODS
 # =========================================================
 
 def run_score_based_methods_one_run(
@@ -751,7 +703,6 @@ def run_score_based_methods_one_run(
     k_ref: int,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 
-    # bind baseline runtime (traditional_fs / graph_fs live there)
     _enter_runtime(BASELINE_ROOT, secondary_root=OOP_ROOT)
 
     HAS_TRAD = os.path.exists(os.path.join(BASELINE_ROOT, "traditional_fs.py"))
@@ -794,18 +745,15 @@ def run_score_based_methods_one_run(
     ytr = y[tr_idx]
     yte = y[te_idx]
 
-    # evaluation style for these: StandardScaler
     scaler = StandardScaler()
     Xtr = scaler.fit_transform(Xtr_raw)
     Xte = scaler.transform(Xte_raw)
 
-    # redundancy on minmax full
     zData_full = _mapminmax_zero_one(X_raw)
 
     n_features = Xtr.shape[1]
     k_ref = max(1, min(int(k_ref) if k_ref else 1, n_features))
 
-    # raw scores (can be complex)
     raw_scores: Dict[str, np.ndarray] = {}
 
     t0 = time.perf_counter()
@@ -821,13 +769,11 @@ def run_score_based_methods_one_run(
 
     score_time = float(time.perf_counter() - t0)
 
-    # ---- sanitize into usable scores (real + finite)
     scores: Dict[str, np.ndarray] = {k: _sanitize_scores(v, mode="abs") for k, v in raw_scores.items()}
 
     front_train_all: List[Dict[str, Any]] = []
     test_points_all: List[Dict[str, Any]] = []
 
-    # ALL features point
     Sall = np.arange(n_features, dtype=int)
 
     front_train_all.extend(_front_train_rows(
@@ -849,10 +795,8 @@ def run_score_based_methods_one_run(
     ))
 
     for mname, s in scores.items():
-        # s is already real finite
         ranking = np.argsort(-np.abs(s))
 
-        # ---- TRAIN front ratios (CV)
         fsets_front = []
         for ratio in RATIOS:
             k = max(1, min(int(round(ratio * n_features)), n_features))
@@ -869,7 +813,6 @@ def run_score_based_methods_one_run(
             rr["front_eval_time"] = front_time
         front_train_all.extend(rows_front)
 
-        # ---- TEST ratios
         for ratio in RATIOS:
             k = max(1, min(int(round(ratio * n_features)), n_features))
             S = ranking[:k].astype(int)
@@ -897,7 +840,6 @@ def run_score_based_methods_one_run(
                 "fset": " ".join(map(str, S.tolist())),
             })
 
-        # ---- TEST k_ref
         Sref = ranking[:k_ref].astype(int)
         t_eval = time.perf_counter()
         acc_ref = _knn_acc_test(Xtr, ytr, Xte, yte, Sref)
@@ -922,7 +864,6 @@ def run_score_based_methods_one_run(
             "fset": " ".join(map(str, Sref.tolist())),
         })
 
-        # per-method logs
         method_dir = os.path.join(root, mname, f"run_{run_id:02d}")
         _ensure_dir(method_dir)
         _write_csv(os.path.join(method_dir, "front_train_cv.csv"), rows_front)
@@ -943,7 +884,7 @@ def run_score_based_methods_one_run(
 
 
 # =========================================================
-# 7) MAIN
+# MAIN
 # =========================================================
 
 def main() -> None:
@@ -956,7 +897,6 @@ def main() -> None:
         dataset_dir = os.path.join(OUT_ROOT, f"dataset_{int(data_idx):02d}")
         _ensure_dir(dataset_dir)
 
-        # Load dataset using baseline runtime (safe; we only keep arrays afterward)
         _enter_runtime(BASELINE_ROOT, secondary_root=OOP_ROOT)
         myinput = _import("myinputdatasetXD").myinputdatasetXD
 
@@ -983,7 +923,6 @@ def main() -> None:
             "test_idx": te_idx.tolist(),
         })
 
-        # ---------- (A) GBFS Enhanced ----------
         enh_front_rows: List[Dict[str, Any]] = []
         enh_test_rows: List[Dict[str, Any]] = []
         enh_k_refs: List[int] = []
@@ -1003,7 +942,6 @@ def main() -> None:
             _write_text(os.path.join(dataset_dir, "gbfs_enhanced_error.txt"), str(e))
             enh_k_refs = [0] * RUNS
 
-        # ---------- (B) GBFS Baseline ----------
         base_root = os.path.join(dataset_dir, "gbfs_baseline")
         _ensure_dir(base_root)
 
@@ -1036,7 +974,6 @@ def main() -> None:
                 _write_text(os.path.join(base_root, f"run_{r:02d}", "error.txt"), str(e))
                 base_k_fallback.append(0)
 
-        # ---------- (C) Score-based methods ----------
         for r in range(1, RUNS + 1):
             k_ref = int(enh_k_refs[r - 1]) if (enh_k_refs and (r - 1) < len(enh_k_refs)) else 0
             if k_ref <= 0:

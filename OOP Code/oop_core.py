@@ -1,10 +1,8 @@
-# oop_core.py
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Protocol, Tuple
 import numpy as np
 
-# dùng lại các hàm init hiện có
 from init_strategies import (
     init_graph_local_threshold,
     init_graph_fisher_redundancy_degree,

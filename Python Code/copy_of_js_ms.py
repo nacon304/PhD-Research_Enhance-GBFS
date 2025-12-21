@@ -1,7 +1,4 @@
-import os
-import shutil
 import numpy as np
-import pandas as pd
 from time import perf_counter
 from scipy.spatial.distance import pdist, squareform
 from sklearn.neighbors import KNeighborsClassifier
@@ -9,90 +6,22 @@ from sklearn.neighbors import KNeighborsClassifier
 from myinputdatasetXD import myinputdatasetXD
 from fisherScore import fisherScore
 from newtry_ms import newtry_ms
-from helper import _mapminmax_zero_one, redundancy_rate_subset, plot_knn_graph_with_selected
 
 from sklearn.model_selection import StratifiedShuffleSplit
 
 import gbfs_globals as GG
 
-from init_strategies import init_graph_local_threshold, init_graph_fisher_redundancy_degree, init_graph_mst_plus_local, init_graph_probabilistic
-
-def build_initial_graph(Z, fisher_raw=None):
+def _mapminmax_zero_one(X):
     """
-    Trả về:
-        A_init : adjacency n×n (float), dùng làm đồ thị sparse ban đầu
-        neighbors : list[np.ndarray], neighbors[i] là list các đỉnh kề của i
-
-    Dựa trên GG.init_mode và các hyper trong gbfs_globals.
+    Regularize each column to [0, 1].
     """
-    mode = getattr(GG, "init_mode", "knn")  # mặc định là như code cũ
-    Z = np.asarray(Z, dtype=float)
+    X = np.asarray(X, dtype=float)
+    X_min = np.min(X, axis=0)
+    X_max = np.max(X, axis=0)
 
-    if mode == "knn":
-        # giữ đúng hành vi cũ: mỗi node nối với GG.kNeigh hàng xóm gần nhất (directed)
-        n = Z.shape[0]
-        k = GG.kNeigh
-        A_init = np.zeros_like(Z, dtype=float)
-        neighbors = []
-        for i in range(n):
-            row = Z[i].copy()
-            row[i] = 0.0
-            idx_sorted = np.argsort(-row)
-            idx_topk = idx_sorted[:k]
-            neighbors.append(idx_topk.astype(int))
-            A_init[i, idx_topk] = Z[i, idx_topk]
-        return A_init, neighbors
-
-    elif mode == "local_thresh":
-        A_init, neighbors = init_graph_local_threshold(
-            Z,
-            k_min=getattr(GG, "init_k_min", 1),
-            quantile=getattr(GG, "init_quantile", 0.8),
-            exclude_self=True,
-            symmetrize=True,
-        )
-        return A_init, neighbors
-
-    elif mode == "fisher_red_deg":
-        if fisher_raw is None:
-            raise ValueError("build_initial_graph: fisher_raw is required for fisher_red_deg mode")
-        A_init, degs, neighbors = init_graph_fisher_redundancy_degree(
-            Z,
-            fisher_scores=fisher_raw,
-            k_min=getattr(GG, "init_k_min", 1),
-            k_max=getattr(GG, "init_k_max", min(GG.kNeigh * 3, Z.shape[0] - 1)),
-            exclude_self=True,
-            symmetrize=True,
-        )
-        GG.init_degrees = degs
-        return A_init, neighbors
-
-    elif mode == "mst_plus_local":
-        A_init, neighbors = init_graph_mst_plus_local(
-            Z,
-            extra_k=getattr(GG, "init_extra_k", 2),
-            exclude_self=True,
-            symmetrize=True,
-        )
-        return A_init, neighbors
-
-    elif mode == "probabilistic":
-        if fisher_raw is None:
-            raise ValueError("build_initial_graph: fisher_raw is required for probabilistic mode")
-        A_init, neighbors = init_graph_probabilistic(
-            Z,
-            fisher_scores=fisher_raw,
-            k_min=getattr(GG, "init_k_min", 1),
-            k_max=getattr(GG, "init_k_max", min(GG.kNeigh * 3, Z.shape[0] - 1)),
-            beta=getattr(GG, "init_beta", 2.0),
-            exclude_self=True,
-            symmetrize=True,
-            random_state=getattr(GG, "init_seed", 42),
-        )
-        return A_init, neighbors
-
-    else:
-        raise ValueError(f"Unknown GG.init_mode = {mode}")
+    denom = X_max - X_min
+    denom[denom == 0] = 1.0
+    return (X - X_min) / denom
 
 def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     """
@@ -109,7 +38,7 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
 
     Returns
     -------
-    product : list of [ACC, FNUM, FSET, RED, T]
+    product : list of [ACC, FNUM, FSET, T]
     T : np.ndarray, shape (RUNS+2, 1)
     datasetName : str
     assiNum : np.ndarray, shape (RUNS+2, 1)
@@ -119,23 +48,11 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     GG.OMEGA = omega
 
     condata, GG.label, datasetName = myinputdatasetXD(dataIdx)
-    output_dir = f"{GG.visual_dir}/{datasetName}"
-    os.makedirs(output_dir, exist_ok=True)
     conData = condata[:, 1:]
 
-    init_modes = ["knn", "local_thresh", "fisher_red_deg", "mst_plus_local", "probabilistic"]
-    # init_modes = ["local_thresh"]
-    metrics = {}
-    for m in init_modes:
-        metrics[m] = {
-            "ACC": np.zeros(RUNS, dtype=float),
-            "FNUM": np.zeros(RUNS, dtype=float),
-            "FSET": np.zeros(RUNS , dtype=float),
-            "RED": np.zeros(RUNS, dtype=float),
-            "TIME": np.zeros(RUNS, dtype=float),
-        }
+    ACC = np.zeros(RUNS, dtype=float)
+    FNUM = np.zeros(RUNS, dtype=float)
     FSET = [[] for _ in range(RUNS + 2)]
-    log_mode = init_modes[0]
 
     assiNum = np.zeros(RUNS, dtype=float)
 
@@ -147,24 +64,30 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
     GG.kNeigh = 5
 
     row = zData.shape[0]
-    GG.run_logs = {}
 
     for Rtimes in range(1, RUNS + 1):
         print(f"---- Run {Rtimes} ----")
         print(f"     kNeigh = {GG.kNeigh}")
 
         # reset counter (will be updated inside newtry_ms)
-        GG.current_run = Rtimes
-        GG.run_logs[Rtimes] = {
-            "pareto_fronts": [],
-            "pop_metrics": []
-        }
         GG.assiNumInside = []
-        run_dir = f"{output_dir}/run_{Rtimes}"
-        shutil.rmtree(run_dir, ignore_errors=True)
-        os.makedirs(run_dir)
 
         tic = perf_counter()
+
+        # # Random train/test split 70/30
+        # perm = np.random.permutation(row)
+        # n_train = int(round(row * 0.7))
+        # train_idx = perm[:n_train]
+
+        # trIdx_arr = np.zeros(row, dtype=bool)
+        # trIdx_arr[train_idx] = True
+        # teIdx_arr = ~trIdx_arr
+        # GG.trIdx = trIdx_arr
+
+        # GG.trData = zData[trIdx_arr, :]
+        # GG.trLabel = GG.label[trIdx_arr]
+        # GG.teData = zData[teIdx_arr, :]
+        # GG.teLabel = GG.label[teIdx_arr]
 
         # ===== Stratified train/test split 70/30 =====
         sss = StratifiedShuffleSplit(
@@ -191,125 +114,60 @@ def Copy_of_js_ms(dataIdx, delt, omega, RUNS):
 
         # ====== Build correlation-based similarity graph 
         adj = 1.0 - pdist(GG.trData.T, metric="correlation")
+        # replace NaN with 0
         adj = np.nan_to_num(adj, nan=0.0)
         adj = np.abs(adj)
+        # full matrix
         GG.Weight = squareform(adj)
         GG.Zout = squareform(adj)
 
-        init_time = perf_counter() - tic
+        # ====== Keep k nearest neighbors for each feature ======
+        GG.kNeiMatrix = np.zeros((GG.featNum, GG.kNeigh), dtype=int)
+        kNeiZoutMode = np.zeros_like(GG.Zout)
+        for i in range(GG.Zout.shape[0]):
+            # sort descending similarity
+            idx_sorted = np.argsort(-GG.Zout[i, :])
+            idx_topk = idx_sorted[:GG.kNeigh]
+            GG.kNeiMatrix[i, :] = idx_topk
+            kNeiZoutMode[i, idx_topk] = 1
 
+        GG.kNeiZout = GG.Zout * (kNeiZoutMode != 0)
+        kNeiAdj = squareform(GG.kNeiZout, force='tovector', checks=False)
+
+        # ====== Feature selection algorithm ======
+        featIdx, _, _ = newtry_ms(kNeiAdj, 20, 50)
+        featIdx = np.asarray(featIdx)
+        selected_features = np.where(featIdx != 0)[0]
+        selected_num = selected_features.size
+
+        # ====== Evaluate by KNN ======
+        if selected_num == 0:
+            acc = 0.0
+        else:
+            knn = KNeighborsClassifier(n_neighbors=5)
+            knn.fit(GG.trData[:, selected_features], GG.trLabel)
+            predLabel = knn.predict(GG.teData[:, selected_features])
+            acc = np.mean(predLabel == GG.teLabel)
+
+        # ====== Store results ======
         idx = Rtimes - 1
+        ACC[idx] = acc
+        FNUM[idx] = selected_num
+        FSET[idx] = selected_features
 
-        # ===== Loop and compare =====
-        for mode in init_modes:
-            t_mode = perf_counter()
+        T[idx] = perf_counter() - tic
 
-            # build graph with mode
-            GG.init_mode = mode
-            A_init, neigh_list = build_initial_graph(GG.Zout, fisher_raw=vWeight0)
-            GG.kNeiZout = A_init.copy()
-            GG.neigh_list = neigh_list
-            kNeiAdj = squareform(GG.kNeiZout, force="tovector", checks=False)
-
-            # ===== Feature selection algorithm ======
-            featIdx, _, _, kNeigh_chosen = newtry_ms(kNeiAdj, 20, 50, run_dir)
-            featIdx = np.asarray(featIdx)
-            selected_features = np.where(featIdx != 0)[0]
-            selected_num = selected_features.size
-
-            if mode == log_mode:
-                GG.run_logs[Rtimes]["kNeigh_chosen"] = kNeigh_chosen
-                GG.run_logs[Rtimes]["selected_features"] = selected_features
-                GG.run_logs[Rtimes]["neighbors"] = neigh_list
-                assiNum[idx] = np.sum(GG.assiNumInside)
-                FSET[idx] = selected_features
-
-            # ===== Evaluate by KNN ======
-            if selected_num == 0:
-                acc = 0.0
-                red = 0.0
-            else:
-                knn = KNeighborsClassifier(n_neighbors=5)
-                knn.fit(GG.trData[:, selected_features], GG.trLabel)
-                predLabel = knn.predict(GG.teData[:, selected_features])
-                acc = np.mean(predLabel == GG.teLabel)
-                red = redundancy_rate_subset(selected_features, zData)
-
-            elapsed_mode = perf_counter() - t_mode
-
-            metrics[mode]["ACC"][idx] = acc
-            metrics[mode]["FNUM"][idx] = selected_num
-            metrics[mode]["RED"][idx] = red
-            metrics[mode]["TIME"][idx] = init_time + elapsed_mode
-
-    # # ====== Save logs for each run ======
-    # for run_id, logs in GG.run_logs.items():
-    #     run_dir = f"{output_dir}/run_{run_id}"
-    #     pop_rows = logs.get("pop_metrics", [])
-    #     if pop_rows:
-    #         df_pop = pd.DataFrame(pop_rows)
-    #         df_pop.to_csv(os.path.join(run_dir, "pop_metrics.csv"), index=False)
-    #     pareto_list = logs.get("pareto_fronts", [])
-    #     for entry in pareto_list:
-    #         gen = entry["gen"]
-    #         df = entry["df"]
-    #         csv_file_name = os.path.join(run_dir, f"gen_{gen:03d}.csv")
-    #         df.to_csv(csv_file_name, index=False)
-
-    #     p_kNeigh_chosen = logs.get("kNeigh_chosen", None)
-    #     p_selected_features = logs.get("selected_features", None)
-    #     p_neighbors = logs.get("neighbors", None)
-
-    #     plot_knn_graph_with_selected(
-    #         p_neighbors,
-    #         p_kNeigh_chosen,
-    #         p_selected_features,
-    #         run_dir,
-    #         run_id=run_id,
-    #         filename_prefix="knn_graph"
-    #     )
-
-    rows = []
-    for r in range(RUNS):
-        row = {"run": r + 1}
-        for mode in init_modes:
-            prefix = mode
-            row[f"acc_{prefix}"] = metrics[mode]["ACC"][r]
-            row[f"fnum_{prefix}"] = metrics[mode]["FNUM"][r]
-            row[f"red_{prefix}"] = metrics[mode]["RED"][r]
-            row[f"time_{prefix}"] = metrics[mode]["TIME"][r]
-        rows.append(row)
-    row_mean = {"run": "mean"}
-    for mode in init_modes:
-        prefix = mode
-        row_mean[f"acc_{prefix}"] = float(metrics[mode]["ACC"].mean())
-        row_mean[f"fnum_{prefix}"] = float(metrics[mode]["FNUM"].mean())
-        row_mean[f"red_{prefix}"] = float(metrics[mode]["RED"].mean())
-        row_mean[f"time_{prefix}"] = float(metrics[mode]["TIME"].mean())
-    rows.append(row_mean)
-    row_std = {"run": "std"}
-    for mode in init_modes:
-        prefix = mode
-        row_std[f"acc_{prefix}"] = float(metrics[mode]["ACC"].std())
-        row_std[f"fnum_{prefix}"] = float(metrics[mode]["FNUM"].std())
-        row_std[f"red_{prefix}"] = float(metrics[mode]["RED"].std())
-        row_std[f"time_{prefix}"] = float(metrics[mode]["TIME"].std())
-    rows.append(row_std)
-    df_init = pd.DataFrame(rows)
-    init_summary_path = os.path.join(output_dir, "init_summary.csv")
-    df_init.to_csv(init_summary_path, index=False)
+        assiNum[idx] = np.sum(GG.assiNumInside)
 
     # ====== Append mean and std (RUNS+1, RUNS+2) ======
-    base_metrics = metrics[log_mode]
-    ACC = np.concatenate([base_metrics["ACC"], [base_metrics["ACC"].mean(), base_metrics["ACC"].std()]])
-    FNUM = np.concatenate([base_metrics["FNUM"], [base_metrics["FNUM"].mean(), base_metrics["FNUM"].std()]])
-    RED = np.concatenate([base_metrics["RED"], [base_metrics["RED"].mean(), base_metrics["RED"].std()]])
-    T = np.concatenate([base_metrics["TIME"], [base_metrics["TIME"].mean(), base_metrics["TIME"].std()]])
+    ACC = np.concatenate([ACC, [ACC.mean(), ACC.std()]])
+    FNUM = np.concatenate([FNUM, [FNUM.mean(), FNUM.std()]])
+    T = np.concatenate([T, [T.mean(), T.std()]])
     assiNum = np.concatenate([assiNum, [assiNum.mean(), assiNum.std()]])
 
-    # [ACC, FNUM, FSET, RED, T]
+    # [ACC, FNUM, FSET, T]
     product = []
     for i in range(RUNS + 2):
-        product.append([ACC[i], FNUM[i], FSET[i], RED[i], T[i]])
+        product.append([ACC[i], FNUM[i], FSET[i], T[i]])
 
     return product, T.reshape(-1, 1), datasetName, assiNum.reshape(-1, 1)

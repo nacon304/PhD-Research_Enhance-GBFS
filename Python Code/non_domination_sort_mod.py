@@ -1,6 +1,6 @@
 import numpy as np
 
-def non_domination_sort_mod(x, M, V, featIdx):
+def non_domination_sort_mod(x, M, V):
     """
     Parameters
     ----------
@@ -13,8 +13,6 @@ def non_domination_sort_mod(x, M, V, featIdx):
         Number of objectives.
     V : int
         Number of decision variables.
-    featIdx : np.ndarray, shape (N, n_features_full)
-        Feature indices corresponding to each individual (same row order as x).
 
     Returns
     -------
@@ -23,11 +21,8 @@ def non_domination_sort_mod(x, M, V, featIdx):
         - V..V+M-1: objective values
         - V+M: rank
         - V+M+1: crowding distance
-    featIdx_sorted : np.ndarray, shape (N, n_features_full)
-        featIdx reordered tương ứng với f (cùng permutation).
     """
     x = np.asarray(x, dtype=float)
-    featIdx = np.asarray(featIdx)  # không ép kiểu float ở đây, để giữ nguyên kiểu
     N, m = x.shape
 
     if m < V + M:
@@ -47,9 +42,14 @@ def non_domination_sort_mod(x, M, V, featIdx):
     dist_col = V + M + 1   
 
     # ===== Non-dominated sorting =====
+    # individual[i]['n'] : number of individuals dominating i
+    # individual[i]['p'] : list of individuals dominated by i
     individual = [{"n": 0, "p": []} for _ in range(N)]
+
+    # F is a list of fronts, each front is a list of indices of individuals in that front
     F = [[]]
 
+    # initialize first front
     for i in range(N):
         for j in range(N):
             dom_less = 0
@@ -90,12 +90,12 @@ def non_domination_sort_mod(x, M, V, featIdx):
 
     # ===== Sort by rank =====
     ranks = x_work[:, rank_col]
+    # mergesort to maintain stable order
     index_of_fronts = np.argsort(ranks, kind="mergesort")
     sorted_based_on_front = x_work[index_of_fronts, :]
 
     # ===== Crowding distance =====
     z = np.zeros_like(sorted_based_on_front)
-    sorted_featIdx = featIdx[index_of_fronts, :]
     current_index = 0
 
     for front_idx in range(len(F) - 1):
@@ -104,6 +104,7 @@ def non_domination_sort_mod(x, M, V, featIdx):
             continue
 
         previous_index = current_index
+        # get the segment corresponding to this front in sorted_based_on_front
         y = sorted_based_on_front[current_index: current_index + n_front, :].copy()
         current_index += n_front
 
@@ -112,13 +113,14 @@ def non_domination_sort_mod(x, M, V, featIdx):
         for obj_i in range(M):
             obj_col = V + obj_i
             obj_values = y[:, obj_col]
+            # sort by this objective
             index_obj = np.argsort(obj_values, kind="mergesort")
             sorted_y = y[index_obj, :]
 
             f_max = sorted_y[-1, obj_col]
             f_min = sorted_y[0, obj_col]
 
-            # boundary = Inf
+            # mark boundary = Inf
             y[index_obj[0], dist_col] = np.inf
             y[index_obj[-1], dist_col] = np.inf
 
@@ -126,7 +128,7 @@ def non_domination_sort_mod(x, M, V, featIdx):
                 y[:, dist_col] = np.inf
                 continue
 
-            # middle points
+            # points in the middle add normalized distance
             for j_pos in range(1, len(index_obj) - 1):
                 idx_mid = index_obj[j_pos]
                 next_obj = sorted_y[j_pos + 1, obj_col]
@@ -139,6 +141,4 @@ def non_domination_sort_mod(x, M, V, featIdx):
         z[previous_index: current_index, :] = y
 
     f = z
-    featIdx_sorted = sorted_featIdx
-
-    return f, featIdx_sorted
+    return f

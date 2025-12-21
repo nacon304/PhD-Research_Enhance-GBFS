@@ -1,10 +1,10 @@
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import KFold
-from sklearn.model_selection import StratifiedKFold
 
 import gbfs_globals as GG
 from kshell_2 import kshell_2
+
 
 def evaluate_objective_f(M, individual_adj):
     """
@@ -45,11 +45,11 @@ def evaluate_objective_f(M, individual_adj):
         Nfold = 5
         td = np.asarray(GG.trData, dtype=float)[:, featIdx]
         tl = np.asarray(GG.trLabel).ravel()
-        
-        skf = StratifiedKFold(n_splits=Nfold, shuffle=True, random_state=42)
+
+        kf = KFold(n_splits=Nfold, shuffle=False)
         F1 = []
 
-        for train_index, test_index in skf.split(td, tl):
+        for train_index, test_index in kf.split(td):
             X_train = td[train_index, :]
             y_train = tl[train_index]
             X_test = td[test_index, :]

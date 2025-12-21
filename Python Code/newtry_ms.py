@@ -42,7 +42,7 @@ def _get_pareto_indices(objs, minimize=True):
     return idx_front
 
 
-def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
+def newtry_ms(inputAdj, pop=20, times=40):
     """
     Parameters
     ----------
@@ -61,19 +61,17 @@ def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
     pareto_objs  : np.ndarray, shape (n_solutions, 2)
         Giá trị (obj1, obj2) tương ứng với mỗi nghiệm Pareto.
     """
-    if GG.featNum is None:
+    if GG.featNum is None or GG.kNeigh is None:
         raise ValueError("newtry_ms: GG.featNum hoặc GG.kNeigh chưa được set.")
 
-    V_f = int(sum(len(nb) for nb in GG.neigh_list))
-    GG.V_f = V_f
+    V_f = GG.featNum * GG.kNeigh
     templateAdj = np.asarray(inputAdj, dtype=float)
 
-    chromes = copy_of_en_nsga_2_mating_strategy(pop, times, templateAdj, V_f, run_dir)
+    chromes = copy_of_en_nsga_2_mating_strategy(pop, times, templateAdj, V_f)
 
     # Giả sử format: [feat_part | obj1 | obj2 | ...]
     feat_part = chromes[:, :GG.featNum]
-    kNeigh_part = chromes[:, GG.featNum : GG.featNum + V_f]
-    obj_part = chromes[:, GG.featNum + V_f : GG.featNum + V_f + 2]  # (N, 2)
+    obj_part = chromes[:, GG.featNum:GG.featNum + 2]  # (N, 2)
 
     # -----------------------------
     # 1) Chọn nghiệm "best" như cũ
@@ -86,17 +84,23 @@ def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
     fits = alpha * obj1 + (1 - alpha) * (1 - obj2 / n_feat)
     idx_best = np.argmax(fits)
     featidx_best = feat_part[idx_best, :]
-    kNeigh_best = kNeigh_part[idx_best, :]
-    # print("Best solution:")
-    # print("Feature mask:", featidx_best)
-    # print("kNeigh mask:", kNeigh_best)
 
     # -----------------------------
     # 2) Lấy Pareto front dựa trên (obj1, obj2)
+    #    (giả định: bạn muốn MINIMIZE cả obj1 và obj2;
+    #     nếu ngược lại thì đổi dấu trước khi truyền vào _get_pareto_indices)
+    # -----------------------------
+    # Nếu trong giải thuật gốc của bạn obj1/obj2 là "càng nhỏ càng tốt",
+    # hãy đổi objs = -obj_part để chuyển về dạng "maximize" chung, hoặc
+    # giữ objs = obj_part và chỉnh logic dominated cho phù hợp.
+    # Ở đây, mình giả định obj1, obj2 là dạng "càng nhỏ càng tốt".
     objs_for_pareto = obj_part.copy()
 
     idx_front = _get_pareto_indices(objs_for_pareto, minimize=True)
     pareto_masks = feat_part[idx_front, :]
     pareto_objs  = obj_part[idx_front, :]
 
-    return featidx_best, pareto_masks, pareto_objs, kNeigh_best
+    # print(feat_part)
+    # print(obj_part)
+
+    return featidx_best, pareto_masks, pareto_objs

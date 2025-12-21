@@ -30,12 +30,12 @@ from ITMO_FS.filters.univariate import (
 )
 
 UNIVARIATE_FILTERS = OrderedDict([
-    ("FILTER_f_ratio",    f_ratio_measure),
-    ("FILTER_gini",       gini_index),
-    ("FILTER_sym_uncert", su_measure),
-    ("FILTER_spearman",   spearman_corr),
+    # ("FILTER_f_ratio",    f_ratio_measure),
+    # ("FILTER_gini",       gini_index),
+    # ("FILTER_sym_uncert", su_measure),
+    # ("FILTER_spearman",   spearman_corr),
     ("FILTER_pearson",    pearson_corr),
-    ("FILTER_fechner",    fechner_corr),
+    # ("FILTER_fechner",    fechner_corr),
     ("FILTER_kendall",    kendall_corr),
     ("FILTER_reliefF",    reliefF_measure),
     ("FILTER_chi2",       chi2_measure),

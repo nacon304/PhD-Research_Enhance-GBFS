@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from scipy.io import loadmat
+from pathlib import Path
 
 def myinputdatasetXD(i):
     """
@@ -19,7 +20,7 @@ def myinputdatasetXD(i):
         Name of the dataset (first letter upper, rest lower).
     """
 
-    base_dir = "D:/PhD/The First Paper/Code Implement/Data"
+    base_dir = str(Path(__file__).resolve().parents[1] / "Data")
 
     # Map index -> (filename, datasetName)
     mapping = {

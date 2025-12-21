@@ -1,5 +1,3 @@
-# compare_gbfs_vs_traditional.py
-
 import numpy as np
 from time import perf_counter
 import matplotlib.pyplot as plt

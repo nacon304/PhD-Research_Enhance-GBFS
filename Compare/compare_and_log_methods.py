@@ -17,6 +17,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 
 import warnings
+from pathlib import Path
 
 # warnings.filterwarnings(
 #     "error",
@@ -26,12 +27,14 @@ import warnings
 # =========================================================
 # CONFIG
 # =========================================================
-BASELINE_ROOT = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Python Code"
-OOP_ROOT      = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\OOP Code"
-OUT_ROOT      = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Compare\Results Debug"
 
-DATASET_INDICES = [1, 2, 3, 4]
-RUNS = 10
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BASELINE_ROOT = str(REPO_ROOT / "Python Code")
+OOP_ROOT      = str(REPO_ROOT / "OOP Code")
+OUT_ROOT      = str(REPO_ROOT / "Compare" / "Results")
+
+DATASET_INDICES = list(range(1, 11))
+RUNS = 30
 
 TEST_SIZE = 0.30
 SPLIT_SEED = 42

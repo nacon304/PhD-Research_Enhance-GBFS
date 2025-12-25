@@ -7,8 +7,12 @@ import csv
 import time
 import warnings
 import importlib
+import argparse
+import random
+import shutil
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
@@ -16,41 +20,30 @@ from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 
-import warnings
-from pathlib import Path
-
-# warnings.filterwarnings(
-#     "error",
-#     message=r".*Casting complex values to real discards the imaginary part.*",
-# )
 
 # =========================================================
-# CONFIG
+# CONFIG (defaults; can be overridden by CLI args)
 # =========================================================
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BASELINE_ROOT = str(REPO_ROOT / "Python Code")
-OOP_ROOT      = str(REPO_ROOT / "OOP Code")
-OUT_ROOT      = str(REPO_ROOT / "Compare" / "Results")
+BASELINE_ROOT_DEFAULT = str(REPO_ROOT / "Python Code")
+OOP_ROOT_DEFAULT      = str(REPO_ROOT / "OOP Code")
+OUT_ROOT_DEFAULT      = str(REPO_ROOT / "Compare" / "Results_HPC")
 
-DATASET_INDICES = list(range(1, 11))
-RUNS = 30
+TEST_SIZE_DEFAULT = 0.30
+SPLIT_SEED_DEFAULT = 42
 
-TEST_SIZE = 0.30
-SPLIT_SEED = 42
+KNN_EVAL_K_DEFAULT = 5
+CV_FOLDS_DEFAULT = 5
+CV_SEED_DEFAULT = 42
 
-KNN_EVAL_K = 5
+BASE_DELT_DEFAULT = 10.0
+BASE_OMEGA_DEFAULT = 0.8
+BASE_KNEIGH_DEFAULT = 5
+BASE_POP_DEFAULT = 20
+BASE_GEN_DEFAULT = 50
 
-CV_FOLDS = 5
-CV_SEED = 42
-
-BASE_DELT = 10.0
-BASE_OMEGA = 0.8
-BASE_KNEIGH = 5
-BASE_POP = 20
-BASE_GEN = 50
-
-RATIOS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+RATIOS_DEFAULT = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 SILENCE_WARNINGS = False
 
@@ -75,6 +68,7 @@ def _write_text(path: str, s: str) -> None:
 def _write_csv(path: str, rows: List[Dict[str, Any]], fieldnames: Optional[List[str]] = None) -> None:
     _ensure_dir(os.path.dirname(path))
     if not rows:
+        # still write headerless empty? Usually skip.
         return
 
     if fieldnames is None:
@@ -122,7 +116,7 @@ def _redundancy_rate_subset_fallback(S: np.ndarray, zData: np.ndarray) -> float:
     vals = C[iu]
     return float(np.mean(vals)) if vals.size else 0.0
 
-def _cv_acc_knn(X: np.ndarray, y: np.ndarray, S: np.ndarray, cv: int, seed: int) -> float:
+def _cv_acc_knn(X: np.ndarray, y: np.ndarray, S: np.ndarray, cv: int, seed: int, knn_k: int) -> float:
     S = np.asarray(S, dtype=int).ravel()
     if S.size == 0:
         return 0.0
@@ -133,17 +127,17 @@ def _cv_acc_knn(X: np.ndarray, y: np.ndarray, S: np.ndarray, cv: int, seed: int)
     skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=seed)
     accs = []
     for tr, va in skf.split(Xs, y):
-        clf = KNeighborsClassifier(n_neighbors=KNN_EVAL_K)
+        clf = KNeighborsClassifier(n_neighbors=knn_k)
         clf.fit(Xs[tr], y[tr])
         pred = clf.predict(Xs[va])
         accs.append(np.mean(pred == y[va]))
     return float(np.mean(accs)) if accs else 0.0
 
-def _knn_acc_test(Xtr: np.ndarray, ytr: np.ndarray, Xte: np.ndarray, yte: np.ndarray, S: np.ndarray) -> float:
+def _knn_acc_test(Xtr: np.ndarray, ytr: np.ndarray, Xte: np.ndarray, yte: np.ndarray, S: np.ndarray, knn_k: int) -> float:
     S = np.asarray(S, dtype=int).ravel()
     if S.size == 0:
         return 0.0
-    clf = KNeighborsClassifier(n_neighbors=KNN_EVAL_K)
+    clf = KNeighborsClassifier(n_neighbors=knn_k)
     clf.fit(Xtr[:, S], ytr)
     pred = clf.predict(Xte[:, S])
     return float(np.mean(pred == yte))
@@ -153,17 +147,15 @@ def _red(S: np.ndarray, zData_full: np.ndarray) -> float:
 
 def _sanitize_scores(s: np.ndarray, mode: str = "abs") -> np.ndarray:
     s = np.asarray(s).ravel()
-
     if np.iscomplexobj(s):
         s = np.abs(s) if mode == "abs" else np.real(s)
-
     s = s.astype(float, copy=False)
     s = np.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
     return s
 
 
 # =========================================================
-# COLLISION CONTROL
+# COLLISION CONTROL (your existing approach)
 # =========================================================
 
 if SILENCE_WARNINGS:
@@ -237,8 +229,12 @@ def _front_train_rows(
     X_train_for_cv: np.ndarray,
     y_train: np.ndarray,
     zData_full_for_red: np.ndarray,
+    cv_folds: int,
+    cv_seed: int,
+    knn_k: int,
     extra_cols: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+
     n_features = X_train_for_cv.shape[1]
     best_by_fnum: Dict[int, Dict[str, Any]] = {}
 
@@ -247,10 +243,10 @@ def _front_train_rows(
         if S.size == 0:
             continue
 
-        acc_cv = _cv_acc_knn(X_train_for_cv, y_train, S, cv=CV_FOLDS, seed=CV_SEED)
+        acc_cv = _cv_acc_knn(X_train_for_cv, y_train, S, cv=cv_folds, seed=cv_seed, knn_k=knn_k)
         er_cv = float(1.0 - acc_cv)
         fnum = int(S.size)
-        fr = float(fnum / n_features)
+        fr = float(fnum / n_features) if n_features else 0.0
         redv = _red(S, zData_full_for_red)
 
         row = {
@@ -274,7 +270,7 @@ def _front_train_rows(
             best_by_fnum[fnum] = row
 
     rows = list(best_by_fnum.values())
-    rows.sort(key=lambda d: float(d["fRatio"]))
+    rows.sort(key=lambda d: float(d.get("fRatio", 0.0)))
     return rows
 
 def _test_point_row(
@@ -288,12 +284,14 @@ def _test_point_row(
     Xte: np.ndarray, yte: np.ndarray,
     zData_full_for_red: np.ndarray,
     time_total: float,
+    knn_k: int,
     ratio: Optional[float] = None,
     k_ref_used: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+
     S = np.asarray(S, dtype=int).ravel()
-    acc = _knn_acc_test(Xtr, ytr, Xte, yte, S) if S.size else 0.0
+    acc = _knn_acc_test(Xtr, ytr, Xte, yte, S, knn_k=knn_k) if S.size else 0.0
 
     row = {
         "dataset_idx": int(dataset_idx),
@@ -317,7 +315,7 @@ def _test_point_row(
 
 
 # =========================================================
-# GBFS BASELINE
+# GBFS BASELINE (single run)
 # =========================================================
 
 def run_gbfs_baseline_one_run(
@@ -334,13 +332,17 @@ def run_gbfs_baseline_one_run(
     kNeigh: int,
     pop: int,
     gen: int,
+    cv_folds: int,
+    cv_seed: int,
+    knn_eval_k: int,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], int]:
 
     method = "GBFS_baseline"
     run_dir = os.path.join(out_dir, f"run_{run_id:02d}")
     _ensure_dir(run_dir)
 
-    _enter_runtime(BASELINE_ROOT, secondary_root=OOP_ROOT)
+    # isolate imports
+    _enter_runtime(args.baseline_root, secondary_root=args.oop_root)
 
     GG = _import("gbfs_globals")
     fisherScore = _import("fisherScore").fisherScore
@@ -359,6 +361,7 @@ def run_gbfs_baseline_one_run(
     tr_mask = np.zeros(zData_full.shape[0], dtype=bool)
     tr_mask[tr_idx] = True
 
+    # set globals
     GG.DELT = float(delt)
     GG.OMEGA = float(omega)
     GG.data = zData_full
@@ -434,6 +437,9 @@ def run_gbfs_baseline_one_run(
         X_train_for_cv=GG.trData,
         y_train=GG.trLabel,
         zData_full_for_red=zData_full,
+        cv_folds=cv_folds,
+        cv_seed=cv_seed,
+        knn_k=knn_eval_k,
     )
 
     test_row = _test_point_row(
@@ -447,6 +453,7 @@ def run_gbfs_baseline_one_run(
         Xte=GG.teData, yte=GG.teLabel,
         zData_full_for_red=zData_full,
         time_total=t_total,
+        knn_k=knn_eval_k,
         extra={"assiNum": float(assiNum)},
     )
 
@@ -471,19 +478,28 @@ def run_gbfs_baseline_one_run(
 
 
 # =========================================================
-# GBFS ENHANCED (OOP)
+# GBFS ENHANCED (OOP) - SINGLE RUN (HPC-friendly)
 # =========================================================
 
-def run_gbfs_enhanced_oop(
+def run_gbfs_enhanced_oop_one_run(
     dataset_idx: int,
-    dataset_dir: str,
-    runs: int,
+    dataset_dir_for_this_run: str,   # <- points to .../dataset_XX/run_YY
+    run_id: int,
+    seed_run: int,
+    test_size: float,
+    split_seed: int,
+    knn_eval_k: int,
+    cv_folds: int,
+    cv_seed: int,
+    base_pop: int,
+    base_gen: int,
+    base_kneigh: int,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[int], str]:
 
-    enhanced_root = os.path.join(dataset_dir, "gbfs_enhanced")
+    enhanced_root = os.path.join(dataset_dir_for_this_run, "gbfs_enhanced")
     _ensure_dir(enhanced_root)
 
-    _enter_runtime(OOP_ROOT, secondary_root=BASELINE_ROOT)
+    _enter_runtime(args.oop_root, secondary_root=args.baseline_root)
 
     oop_core = _import("oop_core")
     runner_oop_mod = _import("runner_oop")
@@ -497,13 +513,14 @@ def run_gbfs_enhanced_oop(
     LogParams = oop_core.LogParams
     GBFSRunner = runner_oop_mod.GBFSRunner
 
+    # patch to export pareto arrays if present
     _ORIG_OOP_NEWTRY = runner_oop_mod.newtry_ms
 
-    def _patched_oop_newtry(*args, **kwargs):
-        res = _ORIG_OOP_NEWTRY(*args, **kwargs)
-        run_dir = kwargs.get("run_dir", None)
-        if run_dir is None and len(args) >= 4:
-            run_dir = args[3]
+    def _patched_oop_newtry(*a, **kw):
+        res = _ORIG_OOP_NEWTRY(*a, **kw)
+        run_dir = kw.get("run_dir", None)
+        if run_dir is None and len(a) >= 4:
+            run_dir = a[3]
         if run_dir and isinstance(res, tuple) and len(res) >= 3:
             try:
                 np.save(os.path.join(run_dir, "pareto_masks.npy"), np.asarray(res[1]))
@@ -514,10 +531,11 @@ def run_gbfs_enhanced_oop(
 
     runner_oop_mod.newtry_ms = _patched_oop_newtry
 
+    # IMPORTANT: runs=1 for single HPC sub-job
     cfg = ExperimentConfig(
-        runs=runs,
-        pop=BASE_POP,
-        gen=BASE_GEN,
+        runs=1,
+        pop=base_pop,
+        gen=base_gen,
 
         init_modes=["knn", "probabilistic"],
         kshell_seq_modes=["normal", "rc_greedy"],
@@ -528,12 +546,12 @@ def run_gbfs_enhanced_oop(
         log_post_seq_mode="buddy",
 
         init_params=InitParams(
-            k_neigh=BASE_KNEIGH,
+            k_neigh=base_kneigh,
             k_min=1,
             quantile=0.8,
             extra_k=2,
             beta=2.0,
-            seed=42,
+            seed=int(seed_run),   # <- vary by run
         ),
 
         kshell_params=KShellParams(
@@ -544,15 +562,15 @@ def run_gbfs_enhanced_oop(
         buddy_params=BuddyParams(
             max_per_core=1,
             lam_red=0.5,
-            cv=5,
-            knn_k=BASE_KNEIGH,
-            seed=42,
+            cv=int(cv_folds),
+            knn_k=int(base_kneigh),
+            seed=int(seed_run),   # <- vary by run
         ),
 
         eval_params=EvalParams(
-            test_size=TEST_SIZE,
-            split_seed=SPLIT_SEED,
-            knn_eval_k=KNN_EVAL_K,
+            test_size=float(test_size),
+            split_seed=int(split_seed),   # keep fixed to keep same split across runs (if you want)
+            knn_eval_k=int(knn_eval_k),
         ),
 
         log_params=LogParams(
@@ -568,130 +586,135 @@ def run_gbfs_enhanced_oop(
     )
 
     runner = GBFSRunner(cfg, visual_root=enhanced_root)
-    product, dataset_name = runner.run_dataset(dataset_idx)
+    product, dataset_name = runner.run_dataset(int(dataset_idx))
 
     _write_json(
         os.path.join(enhanced_root, f"{dataset_idx:02d}", "enhanced_cfg_snapshot.json"),
         asdict(cfg),
     )
 
+    # For train-front calculation we need (Xtr,ytr) + zData_full
     dataset, labels, _ = myinput(int(dataset_idx))
     X_raw = np.asarray(dataset[:, 1:], dtype=float)
     y = np.asarray(labels, dtype=int).ravel()
     zData_full = _mapminmax_zero_one(X_raw)
 
-    tr_idx, te_idx = _fixed_split_indices(X_raw, y, TEST_SIZE, SPLIT_SEED)
+    tr_idx, te_idx = _fixed_split_indices(X_raw, y, float(test_size), int(split_seed))
     Xtr = zData_full[tr_idx, :]
     ytr = y[tr_idx]
-    Xte = zData_full[te_idx, :]
-    yte = y[te_idx]
 
     init_mode = str(cfg.log_init_mode).lower()
     ks_mode   = str(cfg.log_kshell_seq_mode).lower()
     post_mode = str(cfg.log_post_seq_mode).lower()
 
-    front_rows_all: List[Dict[str, Any]] = []
-    test_rows_all: List[Dict[str, Any]] = []
+    # since cfg.runs=1 => internal run index is 1
+    r_internal = 1
+
+    combo_dir = os.path.join(enhanced_root, f"{dataset_idx:02d}", f"run_{r_internal:02d}", init_mode, f"ks_{ks_mode}")
+    post_dir  = os.path.join(combo_dir, f"post_{post_mode}")
+
+    # Collect pareto masks => front points
+    pm_path = os.path.join(combo_dir, "pareto_masks.npy")
+    fsets: List[np.ndarray] = []
+    if os.path.exists(pm_path):
+        pm = np.load(pm_path, allow_pickle=True)
+        pm = np.asarray(pm)
+        if pm.ndim == 1 and pm.size > 0:
+            pm = pm.reshape(1, -1)
+        if pm.ndim == 2:
+            for m in pm:
+                S = np.where(np.asarray(m) != 0)[0].astype(int)
+                if S.size > 0:
+                    fsets.append(S)
+
+    if not fsets:
+        s0_path = os.path.join(combo_dir, "S0_selected.txt")
+        if os.path.exists(s0_path):
+            txt = open(s0_path, "r", encoding="utf-8").read().strip()
+            if txt:
+                S0 = np.array([int(x) for x in txt.split()], dtype=int)
+                if S0.size > 0:
+                    fsets = [S0]
+
+    front_rows = _front_train_rows(
+        dataset_idx=dataset_idx,
+        dataset_name=str(dataset_name),
+        method="GBFS_enhanced",
+        run_id=run_id,                    # <- IMPORTANT: external run_id
+        feature_sets=fsets if fsets else [np.array([], int)],
+        X_train_for_cv=Xtr,
+        y_train=ytr,
+        zData_full_for_red=zData_full,
+        cv_folds=cv_folds,
+        cv_seed=cv_seed,
+        knn_k=knn_eval_k,
+    )
+
+    # Selected final metrics from post
+    pm_json = os.path.join(post_dir, "post_metrics.json")
+    sel_txt = os.path.join(post_dir, "selected_features.txt")
+
+    test_rows: List[Dict[str, Any]] = []
     k_refs: List[int] = []
 
-    for r in range(1, runs + 1):
-        combo_dir = os.path.join(enhanced_root, f"{dataset_idx:02d}", f"run_{r:02d}", init_mode, f"ks_{ks_mode}")
-        post_dir  = os.path.join(combo_dir, f"post_{post_mode}")
+    if os.path.exists(pm_json):
+        meta = json.load(open(pm_json, "r", encoding="utf-8"))
+        acc_test = float(meta.get("acc_test", 0.0))
+        redv = float(meta.get("red", 0.0))
+        fnum = int(meta.get("fnum", 0))
+        time_total = float(meta.get("time_total", meta.get("time_solver", 0.0) + meta.get("time_post_extra", 0.0)))
 
-        pm_path = os.path.join(combo_dir, "pareto_masks.npy")
-        fsets: List[np.ndarray] = []
-        if os.path.exists(pm_path):
-            pm = np.load(pm_path, allow_pickle=True)
-            pm = np.asarray(pm)
-            if pm.ndim == 1 and pm.size > 0:
-                pm = pm.reshape(1, -1)
-            if pm.ndim == 2:
-                for m in pm:
-                    S = np.where(np.asarray(m) != 0)[0].astype(int)
-                    if S.size > 0:
-                        fsets.append(S)
-
-        if not fsets:
-            s0_path = os.path.join(combo_dir, "S0_selected.txt")
-            if os.path.exists(s0_path):
-                txt = open(s0_path, "r", encoding="utf-8").read().strip()
-                if txt:
-                    S0 = np.array([int(x) for x in txt.split()], dtype=int)
-                    if S0.size > 0:
-                        fsets = [S0]
-
-        front_rows = _front_train_rows(
-            dataset_idx=dataset_idx,
-            dataset_name=str(dataset_name),
-            method="GBFS_enhanced",
-            run_id=r,
-            feature_sets=fsets if fsets else [np.array([], int)],
-            X_train_for_cv=Xtr,
-            y_train=ytr,
-            zData_full_for_red=zData_full,
-        )
-        front_rows_all.extend(front_rows)
-
-        pm_json = os.path.join(post_dir, "post_metrics.json")
-        sel_txt = os.path.join(post_dir, "selected_features.txt")
-
-        if os.path.exists(pm_json):
-            meta = json.load(open(pm_json, "r", encoding="utf-8"))
-            acc_test = float(meta.get("acc_test", 0.0))
-            redv = float(meta.get("red", 0.0))
-            fnum = int(meta.get("fnum", 0))
-            time_total = float(meta.get("time_total", meta.get("time_solver", 0.0) + meta.get("time_post_extra", 0.0)))
-
-            if os.path.exists(sel_txt):
-                txt = open(sel_txt, "r", encoding="utf-8").read().strip()
-                S = np.array([int(x) for x in txt.split()], dtype=int) if txt else np.array([], int)
-            else:
-                S = np.array([], int)
-
-            k_refs.append(int(S.size if S.size else fnum))
-
-            test_rows_all.append({
-                "dataset_idx": int(dataset_idx),
-                "dataset": str(dataset_name),
-                "method": "GBFS_enhanced",
-                "run": int(r),
-                "test_mode": "selected",
-                "ratio": "",
-                "k_ref_used": "",
-                "acc_test": float(acc_test),
-                "eRate_test": float(1.0 - acc_test),
-                "fnum": int(S.size if S.size else fnum),
-                "fRatio": float((S.size if S.size else fnum) / zData_full.shape[1]),
-                "red": float(redv),
-                "time_total": float(time_total),
-                "fset": " ".join(map(str, S.tolist())),
-                "note": "from post_metrics.json",
-            })
+        if os.path.exists(sel_txt):
+            txt = open(sel_txt, "r", encoding="utf-8").read().strip()
+            S = np.array([int(x) for x in txt.split()], dtype=int) if txt else np.array([], int)
         else:
-            k_refs.append(0)
-            test_rows_all.append({
-                "dataset_idx": int(dataset_idx),
-                "dataset": str(dataset_name),
-                "method": "GBFS_enhanced",
-                "run": int(r),
-                "test_mode": "selected",
-                "ratio": "",
-                "k_ref_used": "",
-                "acc_test": 0.0,
-                "eRate_test": 1.0,
-                "fnum": 0,
-                "fRatio": 0.0,
-                "red": 0.0,
-                "time_total": 0.0,
-                "fset": "",
-                "note": "missing post_metrics.json",
-            })
+            S = np.array([], int)
 
-    return front_rows_all, test_rows_all, k_refs, str(dataset_name)
+        fnum_eff = int(S.size if S.size else fnum)
+        k_refs.append(max(1, fnum_eff))
+
+        test_rows.append({
+            "dataset_idx": int(dataset_idx),
+            "dataset": str(dataset_name),
+            "method": "GBFS_enhanced",
+            "run": int(run_id),
+            "test_mode": "selected",
+            "ratio": "",
+            "k_ref_used": "",
+            "acc_test": float(acc_test),
+            "eRate_test": float(1.0 - acc_test),
+            "fnum": int(fnum_eff),
+            "fRatio": float(fnum_eff / zData_full.shape[1]) if zData_full.shape[1] else 0.0,
+            "red": float(redv),
+            "time_total": float(time_total),
+            "fset": " ".join(map(str, S.tolist())),
+            "note": "from post_metrics.json",
+        })
+    else:
+        k_refs.append(0)
+        test_rows.append({
+            "dataset_idx": int(dataset_idx),
+            "dataset": str(dataset_name),
+            "method": "GBFS_enhanced",
+            "run": int(run_id),
+            "test_mode": "selected",
+            "ratio": "",
+            "k_ref_used": "",
+            "acc_test": 0.0,
+            "eRate_test": 1.0,
+            "fnum": 0,
+            "fRatio": 0.0,
+            "red": 0.0,
+            "time_total": 0.0,
+            "fset": "",
+            "note": "missing post_metrics.json",
+        })
+
+    return front_rows, test_rows, k_refs, str(dataset_name)
 
 
 # =========================================================
-# SCORE-BASED METHODS
+# SCORE-BASED METHODS (single run)
 # =========================================================
 
 def run_score_based_methods_one_run(
@@ -704,12 +727,16 @@ def run_score_based_methods_one_run(
     dataset_dir: str,
     run_id: int,
     k_ref: int,
+    ratios: List[float],
+    cv_folds: int,
+    cv_seed: int,
+    knn_eval_k: int,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 
-    _enter_runtime(BASELINE_ROOT, secondary_root=OOP_ROOT)
+    _enter_runtime(args.baseline_root, secondary_root=args.oop_root)
 
-    HAS_TRAD = os.path.exists(os.path.join(BASELINE_ROOT, "traditional_fs.py"))
-    HAS_GRAPH = os.path.exists(os.path.join(BASELINE_ROOT, "graph_fs.py"))
+    HAS_TRAD = os.path.exists(os.path.join(args.baseline_root, "traditional_fs.py"))
+    HAS_GRAPH = os.path.exists(os.path.join(args.baseline_root, "graph_fs.py"))
 
     run_all_filters = None
     run_embedded_methods = None
@@ -782,6 +809,7 @@ def run_score_based_methods_one_run(
     front_train_all.extend(_front_train_rows(
         dataset_idx, dataset_name, "ALL_features", run_id,
         [Sall], Xtr, ytr, zData_full,
+        cv_folds=cv_folds, cv_seed=cv_seed, knn_k=knn_eval_k,
         extra_cols={"score_time": 0.0}
     ))
 
@@ -793,6 +821,7 @@ def run_score_based_methods_one_run(
         Xtr=Xtr, ytr=ytr, Xte=Xte, yte=yte,
         zData_full_for_red=zData_full,
         time_total=float(time.perf_counter() - t1),
+        knn_k=knn_eval_k,
         ratio=1.0,
         extra={"score_time": 0.0}
     ))
@@ -801,7 +830,7 @@ def run_score_based_methods_one_run(
         ranking = np.argsort(-np.abs(s))
 
         fsets_front = []
-        for ratio in RATIOS:
+        for ratio in ratios:
             k = max(1, min(int(round(ratio * n_features)), n_features))
             fsets_front.append(ranking[:k].astype(int))
 
@@ -809,6 +838,7 @@ def run_score_based_methods_one_run(
         rows_front = _front_train_rows(
             dataset_idx, dataset_name, mname, run_id,
             fsets_front, Xtr, ytr, zData_full,
+            cv_folds=cv_folds, cv_seed=cv_seed, knn_k=knn_eval_k,
             extra_cols={"score_time": score_time}
         )
         front_time = float(time.perf_counter() - t_front)
@@ -816,12 +846,12 @@ def run_score_based_methods_one_run(
             rr["front_eval_time"] = front_time
         front_train_all.extend(rows_front)
 
-        for ratio in RATIOS:
+        for ratio in ratios:
             k = max(1, min(int(round(ratio * n_features)), n_features))
             S = ranking[:k].astype(int)
 
             t_eval = time.perf_counter()
-            acc = _knn_acc_test(Xtr, ytr, Xte, yte, S)
+            acc = _knn_acc_test(Xtr, ytr, Xte, yte, S, knn_k=knn_eval_k)
             eval_time = float(time.perf_counter() - t_eval)
 
             test_points_all.append({
@@ -845,7 +875,7 @@ def run_score_based_methods_one_run(
 
         Sref = ranking[:k_ref].astype(int)
         t_eval = time.perf_counter()
-        acc_ref = _knn_acc_test(Xtr, ytr, Xte, yte, Sref)
+        acc_ref = _knn_acc_test(Xtr, ytr, Xte, yte, Sref, knn_k=knn_eval_k)
         eval_time = float(time.perf_counter() - t_eval)
 
         test_points_all.append({
@@ -887,127 +917,200 @@ def run_score_based_methods_one_run(
 
 
 # =========================================================
-# MAIN
+# MAIN (ONE JOB = ONE DATASET + ONE RUN)
 # =========================================================
 
-def main() -> None:
-    _ensure_dir(OUT_ROOT)
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset_idx", type=int, required=True)
+    ap.add_argument("--run", type=int, required=True)
 
-    global_front_train: List[Dict[str, Any]] = []
-    global_test_points: List[Dict[str, Any]] = []
+    ap.add_argument("--out_root", type=str, default=OUT_ROOT_DEFAULT)
+    ap.add_argument("--baseline_root", type=str, default=BASELINE_ROOT_DEFAULT)
+    ap.add_argument("--oop_root", type=str, default=OOP_ROOT_DEFAULT)
 
-    for data_idx in DATASET_INDICES:
-        dataset_dir = os.path.join(OUT_ROOT, f"dataset_{int(data_idx):02d}")
-        _ensure_dir(dataset_dir)
+    ap.add_argument("--test_size", type=float, default=TEST_SIZE_DEFAULT)
+    ap.add_argument("--split_seed", type=int, default=SPLIT_SEED_DEFAULT)
 
-        _enter_runtime(BASELINE_ROOT, secondary_root=OOP_ROOT)
-        myinput = _import("myinputdatasetXD").myinputdatasetXD
+    ap.add_argument("--knn_eval_k", type=int, default=KNN_EVAL_K_DEFAULT)
+    ap.add_argument("--cv_folds", type=int, default=CV_FOLDS_DEFAULT)
+    ap.add_argument("--cv_seed", type=int, default=CV_SEED_DEFAULT)
 
-        dataset, labels, datasetName = myinput(int(data_idx))
-        X_raw = np.asarray(dataset[:, 1:], dtype=float)
-        y = np.asarray(labels, dtype=int).ravel()
+    ap.add_argument("--base_delt", type=float, default=BASE_DELT_DEFAULT)
+    ap.add_argument("--base_omega", type=float, default=BASE_OMEGA_DEFAULT)
+    ap.add_argument("--base_kneigh", type=int, default=BASE_KNEIGH_DEFAULT)
+    ap.add_argument("--base_pop", type=int, default=BASE_POP_DEFAULT)
+    ap.add_argument("--base_gen", type=int, default=BASE_GEN_DEFAULT)
 
-        n_samples, n_features = X_raw.shape
-        n_classes = int(len(np.unique(y)))
+    ap.add_argument("--ratios", type=str, default=",".join(map(str, RATIOS_DEFAULT)))
 
-        tr_idx, te_idx = _fixed_split_indices(X_raw, y, TEST_SIZE, SPLIT_SEED)
+    return ap.parse_args()
 
-        _write_json(os.path.join(dataset_dir, "dataset_info.json"), {
-            "dataset_idx": int(data_idx),
-            "dataset": str(datasetName),
-            "n_samples": int(n_samples),
-            "n_features": int(n_features),
-            "n_classes": int(n_classes),
-        })
-        _write_json(os.path.join(dataset_dir, "split_indices.json"), {
-            "test_size": float(TEST_SIZE),
-            "split_seed": int(SPLIT_SEED),
-            "train_idx": tr_idx.tolist(),
-            "test_idx": te_idx.tolist(),
-        })
 
-        enh_front_rows: List[Dict[str, Any]] = []
-        enh_test_rows: List[Dict[str, Any]] = []
-        enh_k_refs: List[int] = []
+def main_one() -> None:
+    dataset_idx = int(args.dataset_idx)
+    run_id = int(args.run)
 
-        try:
-            enh_front_rows, enh_test_rows, enh_k_refs, _ = run_gbfs_enhanced_oop(
-                dataset_idx=int(data_idx),
-                dataset_dir=dataset_dir,
-                runs=RUNS,
-            )
-            _write_csv(os.path.join(dataset_dir, "gbfs_enhanced_front_train_cv.csv"), enh_front_rows)
-            _write_csv(os.path.join(dataset_dir, "gbfs_enhanced_test_points.csv"), enh_test_rows)
+    ratios = [float(x) for x in str(args.ratios).split(",") if str(x).strip()]
 
-            global_front_train.extend(enh_front_rows)
-            global_test_points.extend(enh_test_rows)
-        except Exception as e:
-            _write_text(os.path.join(dataset_dir, "gbfs_enhanced_error.txt"), str(e))
-            enh_k_refs = [0] * RUNS
+    # seed for stochastic algorithms (independent runs)
+    seed_run = 1000 * dataset_idx + run_id
+    random.seed(seed_run)
+    np.random.seed(seed_run)
 
-        base_root = os.path.join(dataset_dir, "gbfs_baseline")
-        _ensure_dir(base_root)
+    out_root = str(args.out_root)
+    _ensure_dir(out_root)
 
-        base_k_fallback: List[int] = []
-        for r in range(1, RUNS + 1):
-            try:
-                front_rows, test_row, fnum_best = run_gbfs_baseline_one_run(
-                    dataset_idx=int(data_idx),
-                    dataset_name=str(datasetName),
-                    X_raw=X_raw,
-                    y=y,
-                    tr_idx=tr_idx,
-                    te_idx=te_idx,
-                    out_dir=base_root,
-                    run_id=r,
-                    delt=BASE_DELT,
-                    omega=BASE_OMEGA,
-                    kNeigh=BASE_KNEIGH,
-                    pop=BASE_POP,
-                    gen=BASE_GEN,
-                )
-                base_k_fallback.append(int(fnum_best))
+    # Each run writes to its own run_dir to avoid collisions in array jobs
+    dataset_dir = os.path.join(out_root, f"dataset_{dataset_idx:02d}")
+    run_dir = os.path.join(dataset_dir, f"run_{run_id:02d}")
+    _ensure_dir(run_dir)
 
-                _write_csv(os.path.join(base_root, f"run_{r:02d}", "front_train_cv.csv"), front_rows)
-                _write_json(os.path.join(base_root, f"run_{r:02d}", "test_point.json"), test_row)
+    # Load dataset once (baseline loader)
+    _enter_runtime(args.baseline_root, secondary_root=args.oop_root)
+    myinput = _import("myinputdatasetXD").myinputdatasetXD
 
-                global_front_train.extend(front_rows)
-                global_test_points.append(test_row)
-            except Exception as e:
-                _write_text(os.path.join(base_root, f"run_{r:02d}", "error.txt"), str(e))
-                base_k_fallback.append(0)
+    dataset, labels, datasetName = myinput(int(dataset_idx))
+    X_raw = np.asarray(dataset[:, 1:], dtype=float)
+    y = np.asarray(labels, dtype=int).ravel()
 
-        for r in range(1, RUNS + 1):
-            k_ref = int(enh_k_refs[r - 1]) if (enh_k_refs and (r - 1) < len(enh_k_refs)) else 0
-            if k_ref <= 0:
-                k_ref = int(base_k_fallback[r - 1]) if (base_k_fallback and (r - 1) < len(base_k_fallback)) else 1
-            if k_ref <= 0:
-                k_ref = 1
+    tr_idx, te_idx = _fixed_split_indices(X_raw, y, float(args.test_size), int(args.split_seed))
 
-            try:
-                front_rows_trad, test_points_trad = run_score_based_methods_one_run(
-                    dataset_idx=int(data_idx),
-                    dataset_name=str(datasetName),
-                    X_raw=X_raw,
-                    y=y,
-                    tr_idx=tr_idx,
-                    te_idx=te_idx,
-                    dataset_dir=dataset_dir,
-                    run_id=r,
-                    k_ref=k_ref,
-                )
-                global_front_train.extend(front_rows_trad)
-                global_test_points.extend(test_points_trad)
-            except Exception as e:
-                _write_text(os.path.join(dataset_dir, "traditional_graph", f"run_{r:02d}_error.txt"), str(e))
+    # Write run-level metadata (no shared file => safe on HPC)
+    _write_json(os.path.join(run_dir, "run_info.json"), {
+        "dataset_idx": int(dataset_idx),
+        "dataset": str(datasetName),
+        "run": int(run_id),
+        "seed_run": int(seed_run),
+        "test_size": float(args.test_size),
+        "split_seed": int(args.split_seed),
+        "cv_folds": int(args.cv_folds),
+        "cv_seed": int(args.cv_seed),
+        "knn_eval_k": int(args.knn_eval_k),
+        "baseline_params": {
+            "delt": float(args.base_delt),
+            "omega": float(args.base_omega),
+            "kNeigh": int(args.base_kneigh),
+            "pop": int(args.base_pop),
+            "gen": int(args.base_gen),
+        },
+        "ratios": ratios,
+    })
 
-    _write_csv(os.path.join(OUT_ROOT, "compare_front_train.csv"), global_front_train)
-    _write_csv(os.path.join(OUT_ROOT, "compare_test_points.csv"), global_test_points)
+    # Collect per-run rows
+    all_front: List[Dict[str, Any]] = []
+    all_test: List[Dict[str, Any]] = []
 
-    print("DONE.")
-    print("TRAIN fronts:", os.path.join(OUT_ROOT, "compare_front_train.csv"))
-    print("TEST points :", os.path.join(OUT_ROOT, "compare_test_points.csv"))
+    # 1) Enhanced OOP (single run)
+    try:
+        # reset seeds again (optional but makes it cleaner)
+        random.seed(seed_run)
+        np.random.seed(seed_run)
 
+        enh_front, enh_test, enh_k_refs, _ = run_gbfs_enhanced_oop_one_run(
+            dataset_idx=dataset_idx,
+            dataset_dir_for_this_run=run_dir,
+            run_id=run_id,
+            seed_run=seed_run,
+            test_size=float(args.test_size),
+            split_seed=int(args.split_seed),
+            knn_eval_k=int(args.knn_eval_k),
+            cv_folds=int(args.cv_folds),
+            cv_seed=int(args.cv_seed),
+            base_pop=int(args.base_pop),
+            base_gen=int(args.base_gen),
+            base_kneigh=int(args.base_kneigh),
+        )
+        _write_csv(os.path.join(run_dir, "gbfs_enhanced_front_train_cv.csv"), enh_front)
+        _write_csv(os.path.join(run_dir, "gbfs_enhanced_test_points.csv"), enh_test)
+
+        all_front.extend(enh_front)
+        all_test.extend(enh_test)
+    except Exception as e:
+        _write_text(os.path.join(run_dir, "gbfs_enhanced_error.txt"), str(e))
+        enh_k_refs = [0]
+
+    # 2) Baseline (single run)
+    base_root = os.path.join(run_dir, "gbfs_baseline")
+    _ensure_dir(base_root)
+
+    base_fnum_best = 0
+    base_front_rows: List[Dict[str, Any]] = []
+    base_test_row: Dict[str, Any] = {}
+    try:
+        random.seed(seed_run)
+        np.random.seed(seed_run)
+
+        base_front_rows, base_test_row, base_fnum_best = run_gbfs_baseline_one_run(
+            dataset_idx=dataset_idx,
+            dataset_name=str(datasetName),
+            X_raw=X_raw,
+            y=y,
+            tr_idx=tr_idx,
+            te_idx=te_idx,
+            out_dir=base_root,
+            run_id=run_id,
+            delt=float(args.base_delt),
+            omega=float(args.base_omega),
+            kNeigh=int(args.base_kneigh),
+            pop=int(args.base_pop),
+            gen=int(args.base_gen),
+            cv_folds=int(args.cv_folds),
+            cv_seed=int(args.cv_seed),
+            knn_eval_k=int(args.knn_eval_k),
+        )
+        all_front.extend(base_front_rows)
+        all_test.append(base_test_row)
+    except Exception as e:
+        _write_text(os.path.join(base_root, f"run_{run_id:02d}", "error.txt"), str(e))
+        base_fnum_best = 0
+
+    # 3) Score-based methods (single run)
+    k_ref = 0
+    if enh_k_refs and enh_k_refs[0] > 0:
+        k_ref = int(enh_k_refs[0])
+    if k_ref <= 0:
+        k_ref = int(base_fnum_best) if base_fnum_best > 0 else 1
+    k_ref = max(1, k_ref)
+
+    try:
+        # deterministic anyway, but keep consistent
+        random.seed(seed_run)
+        np.random.seed(seed_run)
+
+        trad_front, trad_test = run_score_based_methods_one_run(
+            dataset_idx=dataset_idx,
+            dataset_name=str(datasetName),
+            X_raw=X_raw,
+            y=y,
+            tr_idx=tr_idx,
+            te_idx=te_idx,
+            dataset_dir=run_dir,
+            run_id=run_id,
+            k_ref=k_ref,
+            ratios=ratios,
+            cv_folds=int(args.cv_folds),
+            cv_seed=int(args.cv_seed),
+            knn_eval_k=int(args.knn_eval_k),
+        )
+        all_front.extend(trad_front)
+        all_test.extend(trad_test)
+    except Exception as e:
+        _write_text(os.path.join(run_dir, "traditional_graph_error.txt"), str(e))
+
+    # Write run-level merged CSV (HPC-safe)
+    _write_csv(os.path.join(run_dir, "front_train_all.csv"), all_front)
+    _write_csv(os.path.join(run_dir, "test_points_all.csv"), all_test)
+
+    print("DONE one-run.")
+    print("run_dir:", run_dir)
+    print("front_train_all.csv:", os.path.join(run_dir, "front_train_all.csv"))
+    print("test_points_all.csv:", os.path.join(run_dir, "test_points_all.csv"))
+
+
+# Global args
+args = None
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main_one()

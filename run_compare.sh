@@ -1,20 +1,39 @@
 #!/bin/bash
-#SBATCH --job-name=GBFS_COMPARE
-#SBATCH --output=out_%A.out
-#SBATCH --error=err_%A.err
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=01-00:00:00
-#SBATCH --partition=parallel
+set -euo pipefail
 
-cd /nfs/scratch/<user>/GBFS-SND || exit 1
+homeDir='/nfs/scratch/<user>/GBFS-SND'
+cd "$homeDir/Compare" || exit 1
 
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate gbfs_enhance
+# -----------------------------
+# List of dataset indices
+# -----------------------------
+# Dataset index mapping (1–10):
+#  1: Glass        (glass.mat)
+#  2: Urban        (Urban.mat)
+#  3: Musk1        (Musk1.mat)
+#  4: Madelon      (madelon.mat)
+#  5: Bioresponse  (Bioresponse.mat)
+#  6: Colon        (Colon.mat)
+#  7: PIE10P       (PIE10P.mat)
+#  8: BASEHOCK     (BASEHOCK.mat)
+#  9: GISETTE      (GISETTE.mat)
+# 10: TOX_171      (TOX171.mat)
+datasets=(
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+)
 
-export MPLBACKEND=Agg
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+RUNS=30
 
-python Compare/compare_and_log_methods.py
+for dataset_idx in "${datasets[@]}"; do
+    echo "Submitting: dataset_idx=${dataset_idx}, runs=1..${RUNS}"
+    sbatch --array=1-"$RUNS" job_slurm_one_dataset.sh "$dataset_idx"
+done

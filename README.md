@@ -35,4 +35,4 @@ Outputs are written under the OUT_ROOT configured inside compare_and_log_methods
 ## 4) Run on HPC via SLURM
 
 Submit:
-sbatch run_compare.sh
+bash run_compare.sh

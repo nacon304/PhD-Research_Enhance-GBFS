@@ -36,6 +36,13 @@ def myinputdatasetXD(i):
         11: ("ARCENE.mat",     "ARCENE"),
         12: ("SMKCAN187.mat",  "SMK_CAN_187"),
         13: ("DEXTER.mat",     "DEXTER"),
+
+        14: ("GAMETES_Epi2_1000atts.mat","GAMETES"),
+        15: ("USPS.mat",                 "USPS"),
+        16: ("ISOLET.mat",               "ISOLET"),
+        17: ("GINA_01.mat",              "GINA"),
+        18: ("ORL_32x32.mat",            "ORL"),
+        19: ("COIL100_32x32_01.mat",     "COIL100"),
         # 11: ("wine.mat",       "Wine"),
         # 12: ("hepatitis.mat",  "Hepatitis"),
         # 13: ("Yale.mat",       "Yale"),

@@ -48,13 +48,13 @@ warnings.filterwarnings(
 
 BASELINE_ROOT = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Python Code"
 OOP_ROOT      = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\OOP Code"
-OUT_ROOT      = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Compare\Results Debug"
+OUT_ROOT      = r"D:\PhD\The First Paper\Code Implement\GBFS-SND\Compare\Results"
 
-DATASET_INDICES = [1, 2, 3, 4]
-RUNS = 10
+DATASET_INDICES = [14, 15, 16, 17, 18, 19]  # GAMETES, USPS, ISOLET, GINA, ORL, COIL100
+RUNS = 3
 
 TEST_SIZE = 0.30
-SPLIT_SEED = 42
+SPLIT_SEED = 42 
 
 KNN_EVAL_K = 5
 

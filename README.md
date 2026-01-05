@@ -21,7 +21,7 @@ Default dataset directory:
 
 - <repo_root>/Data
 
-Link data: [Google Drive](https://drive.google.com/file/d/18K9P99MJLZlnqPNwzx8P4JRGCik59QKv/view?usp=sharing)
+Link data: [Google Drive](https://drive.google.com/file/d/1vzxGjahPR2vf3dAXPLEjAuZTip6PGgD7/view?usp=sharing)
 
 ## 3) Run the comparison script
 

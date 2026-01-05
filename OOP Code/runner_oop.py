@@ -219,7 +219,16 @@ class GBFSRunner:
                         _save_neighbors_json(ctx.neigh_list, os.path.join(mode_dir, "neighbors.json"))
 
                     kNeiAdj = squareform(ctx.A_init, force="tovector", checks=False)
-                    featIdx, _, _, kNeigh_chosen = newtry_ms(kNeiAdj, self.cfg.pop, self.cfg.gen, mode_dir)
+                    featIdx, pareto_masks, pareto_objs, kNeigh_chosen = newtry_ms(
+                        kNeiAdj, self.cfg.pop, self.cfg.gen, mode_dir
+                    )
+                    try:
+                        if pareto_masks is not None:
+                            np.save(os.path.join(mode_dir, "pareto_masks.npy"), np.asarray(pareto_masks))
+                        if pareto_objs is not None:
+                            np.save(os.path.join(mode_dir, "pareto_objs.npy"), np.asarray(pareto_objs))
+                    except Exception:
+                        pass
 
                     t_after_solver = perf_counter()
                     solver_time = prep_time + (t_after_solver - t0)

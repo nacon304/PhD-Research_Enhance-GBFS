@@ -1,4 +1,4 @@
-name: gbfs_compare
+name: gbfs_enhance
 channels:
   - conda-forge
   - nodefaults

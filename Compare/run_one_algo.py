@@ -855,42 +855,6 @@ def run_graph_job(args, run_dir: str, seed_run: int) -> None:
     })
 
 
-# -----------------------------
-# CLI
-# -----------------------------
-def parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset_idx", type=int, required=True)
-    ap.add_argument("--run", type=int, required=True)
-    ap.add_argument("--algo", type=str, required=True)
-
-    ap.add_argument("--out_root", type=str, required=True)
-    ap.add_argument("--baseline_root", type=str, required=True)
-    ap.add_argument("--oop_root", type=str, required=True)
-
-    ap.add_argument("--test_size", type=float, default=0.30)
-    ap.add_argument("--split_seed", type=int, default=42)
-
-    ap.add_argument("--knn_eval_k", type=int, default=5)
-    ap.add_argument("--cv_folds", type=int, default=5)
-    ap.add_argument("--cv_seed", type=int, default=42)
-
-    # GBFS baseline/enhanced params
-    ap.add_argument("--base_delt", type=float, default=10.0)
-    ap.add_argument("--base_omega", type=float, default=0.8)
-    ap.add_argument("--base_kneigh", type=int, default=5)
-    ap.add_argument("--base_pop", type=int, default=20)
-    ap.add_argument("--base_gen", type=int, default=50)
-
-    # enhanced kshell params
-    ap.add_argument("--ks_max_add", type=int, default=5)
-    ap.add_argument("--ks_rc_tau", type=float, default=0.3)
-
-    # ratio grid for score-based methods
-    ap.add_argument("--ratios", type=str, default="0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9")
-
-    return ap.parse_args()
-
 def run_allfeatures_job(args, run_dir: str, seed_run: int) -> None:
     """
     Baseline: KNN using ALL features (no selection).
@@ -999,6 +963,43 @@ def run_allfeatures_job(args, run_dir: str, seed_run: int) -> None:
         "train_cv_computed": bool(do_cv),
         "scaler": "StandardScaler",
     })
+
+
+# -----------------------------
+# CLI
+# -----------------------------
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset_idx", type=int, required=True)
+    ap.add_argument("--run", type=int, required=True)
+    ap.add_argument("--algo", type=str, required=True)
+
+    ap.add_argument("--out_root", type=str, required=True)
+    ap.add_argument("--baseline_root", type=str, required=True)
+    ap.add_argument("--oop_root", type=str, required=True)
+
+    ap.add_argument("--test_size", type=float, default=0.30)
+    ap.add_argument("--split_seed", type=int, default=42)
+
+    ap.add_argument("--knn_eval_k", type=int, default=5)
+    ap.add_argument("--cv_folds", type=int, default=5)
+    ap.add_argument("--cv_seed", type=int, default=42)
+
+    # GBFS baseline/enhanced params
+    ap.add_argument("--base_delt", type=float, default=10.0)
+    ap.add_argument("--base_omega", type=float, default=0.8)
+    ap.add_argument("--base_kneigh", type=int, default=5)
+    ap.add_argument("--base_pop", type=int, default=20)
+    ap.add_argument("--base_gen", type=int, default=50)
+
+    # enhanced kshell params
+    ap.add_argument("--ks_max_add", type=int, default=5)
+    ap.add_argument("--ks_rc_tau", type=float, default=0.3)
+
+    # ratio grid for score-based methods
+    ap.add_argument("--ratios", type=str, default="0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9")
+
+    return ap.parse_args()
 
 def main() -> None:
     args = parse_args()

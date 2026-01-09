@@ -891,6 +891,114 @@ def parse_args() -> argparse.Namespace:
 
     return ap.parse_args()
 
+def run_allfeatures_job(args, run_dir: str, seed_run: int) -> None:
+    """
+    Baseline: KNN using ALL features (no selection).
+    Outputs:
+      - front_train_cv.csv : 1 point (optional CV; may be skipped if too heavy)
+      - test_points.csv    : 1 point (test accuracy)
+    """
+    method = "KNN_ALL"
+
+    _enter_runtime(args.baseline_root, secondary_root=args.oop_root)
+    myinput = _import("myinputdatasetXD").myinputdatasetXD
+
+    dataset, labels, datasetName = myinput(int(args.dataset_idx))
+    X_raw = np.asarray(dataset[:, 1:], dtype=float)
+    y = np.asarray(labels, dtype=int).ravel()
+
+    tr_idx, te_idx = _fixed_split_indices(X_raw, y, float(args.test_size), int(args.split_seed))
+
+    scaler = StandardScaler()
+    Xtr = scaler.fit_transform(X_raw[tr_idx, :])
+    Xte = scaler.transform(X_raw[te_idx, :])
+    ytr = y[tr_idx]
+    yte = y[te_idx]
+
+    zData_full = _mapminmax_zero_one(X_raw)
+
+    n_features = Xtr.shape[1]
+    S_all = np.arange(n_features, dtype=int)
+
+    # -------- Train "front" (single point)
+    DO_CV_MAX_FEATS = 2000
+    DO_CV_MAX_SAMPLES = 8000
+    do_cv = (Xtr.shape[0] <= DO_CV_MAX_SAMPLES) and (n_features <= DO_CV_MAX_FEATS)
+
+    front_rows: List[Dict[str, Any]] = []
+    if do_cv:
+        front_rows = _front_train_rows(
+            dataset_idx=int(args.dataset_idx),
+            dataset_name=str(datasetName),
+            method=method,
+            run_id=int(args.run),
+            feature_sets=[S_all],
+            X_train_for_cv=Xtr,
+            y_train=ytr,
+            zData_full_for_red=zData_full,
+            cv_folds=int(args.cv_folds),
+            cv_seed=int(args.cv_seed),
+            knn_k=int(args.knn_eval_k),
+            extra_cols={"note": "ALL features", "scaler": "StandardScaler"},
+        )
+    else:
+        fnum = int(n_features)
+        redv = _redundancy_rate_subset_fallback(S_all, zData_full)
+        front_rows = [{
+            "dataset_idx": int(args.dataset_idx),
+            "dataset": str(datasetName),
+            "method": method,
+            "run": int(args.run),
+            "point_id": 0,
+            "fnum": fnum,
+            "fRatio": 1.0,
+            "acc_train_cv": float("nan"),
+            "eRate_train_cv": float("nan"),
+            "red": float(redv),
+            "fset": " ".join(map(str, S_all.tolist())),
+            "note": "ALL features (train CV skipped: too heavy)",
+            "scaler": "StandardScaler",
+        }]
+
+    t1 = time.perf_counter()
+    acc = _knn_acc_test(Xtr, ytr, Xte, yte, S_all, knn_k=int(args.knn_eval_k))
+    eval_time = float(time.perf_counter() - t1)
+
+    test_rows = [{
+        "dataset_idx": int(args.dataset_idx),
+        "dataset": str(datasetName),
+        "method": method,
+        "run": int(args.run),
+        "test_mode": "all",
+        "acc_test": float(acc),
+        "eRate_test": float(1.0 - acc),
+        "fnum": int(n_features),
+        "fRatio": 1.0,
+        "red": float(_redundancy_rate_subset_fallback(S_all, zData_full)),
+        "time_total": float(eval_time),
+        "eval_time": float(eval_time),
+        "fset": " ".join(map(str, S_all.tolist())),
+        "note": "ALL features",
+        "scaler": "StandardScaler",
+    }]
+
+    _write_csv(os.path.join(run_dir, "front_train_cv.csv"), front_rows)
+    _write_csv(os.path.join(run_dir, "test_points.csv"), test_rows)
+    _write_json(os.path.join(run_dir, "run_meta.json"), {
+        "algo": args.algo,
+        "method": method,
+        "dataset_idx": int(args.dataset_idx),
+        "dataset": str(datasetName),
+        "run": int(args.run),
+        "seed_run": int(seed_run),
+        "test_size": float(args.test_size),
+        "split_seed": int(args.split_seed),
+        "knn_eval_k": int(args.knn_eval_k),
+        "cv_folds": int(args.cv_folds),
+        "cv_seed": int(args.cv_seed),
+        "train_cv_computed": bool(do_cv),
+        "scaler": "StandardScaler",
+    })
 
 def main() -> None:
     args = parse_args()
@@ -920,7 +1028,9 @@ def main() -> None:
         "knn_eval_k": int(args.knn_eval_k),
     })
 
-    if args.algo == "baseline":
+    if args.algo == "all":
+        run_allfeatures_job(args, run_dir, seed_run)
+    elif args.algo == "baseline":
         run_baseline_job(args, run_dir, seed_run)
     elif args.algo.startswith("enh:"):
         run_enhanced_job(args, run_dir, seed_run)
@@ -962,8 +1072,4 @@ if __name__ == "__main__":
 #   --cv_folds 3 --cv_seed 42 `
 #   --knn_eval_k 5
 
-# python "$REPO\Compare\run_one_algo.py" `
-#   --dataset_idx 1 --run 1 --algo "trad:FILTER_pearson" `
-#   --out_root "$OUT" `
-#   --baseline_root "$BASELINE" --oop_root "$OOP" `
-#   --cv_folds 3 --knn_eval_k 5
+# python "$REPO\Compare\run_one_algo.py" --dataset_idx 2 --run 1 --algo "trad:FILTER_pearson" --out_root "$OUT" --baseline_root "$BASELINE" --oop_root "$OOP" --cv_folds 3 --knn_eval_k 5

@@ -29,6 +29,7 @@ algos=(
   "enh:probabilistic:normal"
   "enh:probabilistic:rc_greedy"
 
+  "all"
   "trad:FILTER_pearson"
   "trad:FILTER_kendall"
   "trad:FILTER_reliefF"

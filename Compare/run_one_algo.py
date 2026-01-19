@@ -18,6 +18,9 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 
 
+# -----------------------------
+# ref_sizes lookup for AUTO fixed_fnum (when --fixed_fnum True/auto)
+# -----------------------------
 _REF_CACHE: dict[str, dict[tuple[int, int], int]] = {}
 
 def _default_ref_sizes_path() -> str:
@@ -50,6 +53,7 @@ def _load_ref_sizes(ref_csv_path: str) -> dict[tuple[int, int], int]:
 def _auto_fixed_fnum_from_ref(dataset_idx: int, run_id: int, ref_csv_path: str) -> int | None:
     mp = _load_ref_sizes(ref_csv_path)
     return mp.get((dataset_idx, run_id))
+
 
 # -----------------------------
 # utils I/O
@@ -86,6 +90,15 @@ def _write_csv(path: str, rows: List[Dict[str, Any]], fieldnames: Optional[List[
 def _algo_tag(algo: str) -> str:
     # safe folder name
     return algo.replace(":", "__").replace("/", "_").replace("\\", "_").replace(" ", "_")
+
+def _fmt_float_tag(x: float) -> str:
+    # 0.5 -> "0p5", 2.0 -> "2", 0.25 -> "0p25"
+    try:
+        s = f"{float(x):g}"
+    except Exception:
+        s = str(x)
+    s = s.replace("-", "m").replace(".", "p")
+    return s
 
 
 # -----------------------------
@@ -316,6 +329,10 @@ def run_enhanced_job(args, run_dir: str, seed_run: int) -> None:
     LogParams = oop_core.LogParams
     GBFSRunner = runner_oop_mod.GBFSRunner
 
+    # sensitivity params (default = paper)
+    prob_beta = float(getattr(args, "prob_beta", 2.0))
+    buddy_lambda = float(getattr(args, "buddy_lambda", 0.5))
+
     # IMPORTANT: runner_oop uses cfg.test_size/cfg.split_seed/cfg.knn_eval_k (top-level)
     cfg = ExperimentConfig(
         runs=1,
@@ -339,16 +356,16 @@ def run_enhanced_job(args, run_dir: str, seed_run: int) -> None:
             k_min=1,
             quantile=0.8,
             extra_k=2,
-            beta=2.0,
+            beta=float(prob_beta),          # <-- was 2.0
             seed=int(seed_run),
         ),
         kshell_params=KShellParams(
             max_add=int(args.ks_max_add),
-            rc_tau=float(args.ks_rc_tau),
+            rc_tau=float(args.ks_rc_tau),   # <-- tau sweep already supported
         ),
         buddy_params=BuddyParams(
             max_per_core=1,
-            lam_red=0.5,
+            lam_red=float(buddy_lambda),    # <-- was 0.5
             cv=int(args.cv_folds),
             knn_k=int(args.base_kneigh),
             seed=int(seed_run),
@@ -421,7 +438,13 @@ def run_enhanced_job(args, run_dir: str, seed_run: int) -> None:
         cv_folds=int(args.cv_folds),
         cv_seed=int(args.cv_seed),
         knn_k=int(args.knn_eval_k),
-        extra_cols={"init_mode": init_mode, "ks_mode": ks_mode},
+        extra_cols={
+            "init_mode": init_mode,
+            "ks_mode": ks_mode,
+            "prob_beta": float(prob_beta),
+            "ks_rc_tau": float(args.ks_rc_tau),
+            "buddy_lambda": float(buddy_lambda),
+        },
     )
 
     test_rows: List[Dict[str, Any]] = []
@@ -453,7 +476,14 @@ def run_enhanced_job(args, run_dir: str, seed_run: int) -> None:
             zData_full_for_red=zData_full,
             time_total=t_total,
             knn_k=int(args.knn_eval_k),
-            extra={"init_mode": init_mode, "ks_mode": ks_mode, "post_mode": post_mode},
+            extra={
+                "init_mode": init_mode,
+                "ks_mode": ks_mode,
+                "post_mode": post_mode,
+                "prob_beta": float(prob_beta),
+                "ks_rc_tau": float(args.ks_rc_tau),
+                "buddy_lambda": float(buddy_lambda),
+            },
         ))
 
     _write_csv(os.path.join(run_dir, "front_train_cv.csv"), front_rows)
@@ -476,6 +506,8 @@ def run_enhanced_job(args, run_dir: str, seed_run: int) -> None:
             "k_neigh": int(args.base_kneigh),
             "ks_max_add": int(args.ks_max_add),
             "ks_rc_tau": float(args.ks_rc_tau),
+            "prob_beta": float(prob_beta),
+            "buddy_lambda": float(buddy_lambda),
         },
         "paths": {"combo_dir": combo_dir}
     })
@@ -696,7 +728,7 @@ def run_traditional_job(args, run_dir: str, seed_run: int) -> None:
         for rr in front_rows:
             rr["front_eval_time"] = front_eval_time
 
-        # test points for each ratio
+        # test points
         if fixed_k > 0:
             k = max(1, min(fixed_k, n_features))
             S = ranking[:k].astype(int)
@@ -743,7 +775,6 @@ def run_traditional_job(args, run_dir: str, seed_run: int) -> None:
                 })
 
     else:
-        # 2) WRAPPER methods => must be run per-k (expensive; recommended to disable for huge datasets)
         if hasattr(trad, "WRAPPER_METHODS") and method in trad.WRAPPER_METHODS:
             func = trad.WRAPPER_METHODS[method]
             fsets = []
@@ -945,12 +976,6 @@ def run_graph_job(args, run_dir: str, seed_run: int) -> None:
 
 
 def run_allfeatures_job(args, run_dir: str, seed_run: int) -> None:
-    """
-    Baseline: KNN using ALL features (no selection).
-    Outputs:
-      - front_train_cv.csv : 1 point (optional CV; may be skipped if too heavy)
-      - test_points.csv    : 1 point (test accuracy)
-    """
     method = "KNN_ALL"
 
     _enter_runtime(args.baseline_root, secondary_root=args.oop_root)
@@ -973,7 +998,6 @@ def run_allfeatures_job(args, run_dir: str, seed_run: int) -> None:
     n_features = Xtr.shape[1]
     S_all = np.arange(n_features, dtype=int)
 
-    # -------- Train "front" (single point)
     DO_CV_MAX_FEATS = 2000
     DO_CV_MAX_SAMPLES = 8000
     do_cv = (Xtr.shape[0] <= DO_CV_MAX_SAMPLES) and (n_features <= DO_CV_MAX_FEATS)
@@ -1085,6 +1109,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--ks_max_add", type=int, default=5)
     ap.add_argument("--ks_rc_tau", type=float, default=0.3)
 
+    ap.add_argument("--prob_beta", type=float, default=2.0, help="ProbInit beta (default 2.0).")
+    ap.add_argument("--buddy_lambda", type=float, default=0.5, help="Buddy-SFS redundancy weight lambda (default 0.5).")
+
     ap.add_argument("--fixed_fnum", type=str, default="0",
                     help="Integer K, or True/auto to load target_fnum from ref_sizes.csv by (dataset_idx, run).")
     ap.add_argument("--ref_sizes_csv", type=str, default=_default_ref_sizes_path(),
@@ -1133,8 +1160,14 @@ def main() -> None:
     random.seed(seed_run)
     np.random.seed(seed_run)
 
-    # output layout: OUT_ROOT/dataset_XX/<algo_tag>/run_YY/
     algo_tag = _algo_tag(args.algo)
+    if args.algo.startswith("enh:"):
+        algo_tag += (
+            f"__beta_{_fmt_float_tag(float(args.prob_beta))}"
+            f"__tau_{_fmt_float_tag(float(args.ks_rc_tau))}"
+            f"__lam_{_fmt_float_tag(float(args.buddy_lambda))}"
+        )
+
     run_dir = os.path.join(str(args.out_root), f"dataset_{dataset_idx:02d}", algo_tag, f"run_{run_id:02d}")
     _ensure_dir(run_dir)
 
@@ -1149,6 +1182,9 @@ def main() -> None:
         "cv_seed": int(args.cv_seed),
         "knn_eval_k": int(args.knn_eval_k),
         "fixed_fnum": int(args.fixed_fnum),
+        "prob_beta": float(args.prob_beta),
+        "ks_rc_tau": float(args.ks_rc_tau),
+        "buddy_lambda": float(args.buddy_lambda),
     })
 
     if args.algo == "all":
@@ -1191,6 +1227,7 @@ if __name__ == "__main__":
 #   --baseline_root "$BASELINE" --oop_root "$OOP" `
 #   --base_pop 20 --base_gen 50 `
 #   --ks_max_add 5 --ks_rc_tau 0.3 `
+#   --prob_beta 2.0 --buddy_lambda 0.5 `
 #   --test_size 0.3 --split_seed 42 `
 #   --cv_folds 3 --cv_seed 42 `
 #   --knn_eval_k 5

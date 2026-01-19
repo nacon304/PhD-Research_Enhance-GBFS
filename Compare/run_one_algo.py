@@ -18,6 +18,39 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 
 
+_REF_CACHE: dict[str, dict[tuple[int, int], int]] = {}
+
+def _default_ref_sizes_path() -> str:
+    try:
+        return str(Path(__file__).with_name("ref_sizes.csv"))
+    except Exception:
+        return "ref_sizes.csv"
+
+def _load_ref_sizes(ref_csv_path: str) -> dict[tuple[int, int], int]:
+    apath = os.path.abspath(ref_csv_path)
+    if apath in _REF_CACHE:
+        return _REF_CACHE[apath]
+
+    mp: dict[tuple[int, int], int] = {}
+    with open(apath, "r", encoding="utf-8") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            try:
+                did = int(float(str(row.get("dataset_idx", "")).strip()))
+                run_id = int(float(str(row.get("run", "")).strip()))
+                k = int(round(float(str(row.get("target_fnum", "")).strip())))
+            except Exception:
+                continue
+            if did > 0 and run_id > 0 and k > 0:
+                mp[(did, run_id)] = k
+
+    _REF_CACHE[apath] = mp
+    return mp
+
+def _auto_fixed_fnum_from_ref(dataset_idx: int, run_id: int, ref_csv_path: str) -> int | None:
+    mp = _load_ref_sizes(ref_csv_path)
+    return mp.get((dataset_idx, run_id))
+
 # -----------------------------
 # utils I/O
 # -----------------------------
@@ -603,7 +636,11 @@ def run_traditional_job(args, run_dir: str, seed_run: int) -> None:
 
     zData_full = _mapminmax_zero_one(X_raw)
     n_features = Xtr.shape[1]
-    ratios = [float(x) for x in str(args.ratios).split(",") if str(x).strip()]
+    fixed_k = int(getattr(args, "fixed_fnum", 0))
+    if fixed_k > 0:
+        ratios = []
+    else:
+        ratios = [float(x) for x in str(args.ratios).split(",") if str(x).strip()]
 
     t0 = time.perf_counter()
 
@@ -632,9 +669,13 @@ def run_traditional_job(args, run_dir: str, seed_run: int) -> None:
         ranking = np.argsort(-np.abs(s))
 
         fsets = []
-        for ratio in ratios:
-            k = max(1, min(int(round(ratio * n_features)), n_features))
+        if fixed_k > 0:
+            k = max(1, min(fixed_k, n_features))
             fsets.append(ranking[:k].astype(int))
+        else:
+            for ratio in ratios:
+                k = max(1, min(int(round(ratio * n_features)), n_features))
+                fsets.append(ranking[:k].astype(int))
 
         t_front = time.perf_counter()
         front_rows = _front_train_rows(
@@ -656,30 +697,50 @@ def run_traditional_job(args, run_dir: str, seed_run: int) -> None:
             rr["front_eval_time"] = front_eval_time
 
         # test points for each ratio
-        for ratio in ratios:
-            k = max(1, min(int(round(ratio * n_features)), n_features))
+        if fixed_k > 0:
+            k = max(1, min(fixed_k, n_features))
             S = ranking[:k].astype(int)
-            t1 = time.perf_counter()
             acc = _knn_acc_test(Xtr, ytr, Xte, yte, S, knn_k=int(args.knn_eval_k))
-            eval_time = float(time.perf_counter() - t1)
-
             test_rows.append({
                 "dataset_idx": int(args.dataset_idx),
                 "dataset": str(datasetName),
                 "method": method,
                 "run": int(args.run),
-                "test_mode": "ratio",
-                "ratio": float(ratio),
+                "test_mode": "fixed_k",
+                "fixed_fnum": int(k),
                 "acc_test": float(acc),
                 "eRate_test": float(1.0 - acc),
                 "fnum": int(S.size),
                 "fRatio": float(S.size / n_features),
                 "red": float(_redundancy_rate_subset_fallback(S, zData_full)),
-                "time_total": float(score_time + eval_time),
-                "score_time": float(score_time),
-                "eval_time": float(eval_time),
+                "time_total": float(score_time),
                 "fset": " ".join(map(str, S.tolist())),
             })
+        else:
+            for ratio in ratios:
+                k = max(1, min(int(round(ratio * n_features)), n_features))
+                S = ranking[:k].astype(int)
+                t1 = time.perf_counter()
+                acc = _knn_acc_test(Xtr, ytr, Xte, yte, S, knn_k=int(args.knn_eval_k))
+                eval_time = float(time.perf_counter() - t1)
+
+                test_rows.append({
+                    "dataset_idx": int(args.dataset_idx),
+                    "dataset": str(datasetName),
+                    "method": method,
+                    "run": int(args.run),
+                    "test_mode": "ratio",
+                    "ratio": float(ratio),
+                    "acc_test": float(acc),
+                    "eRate_test": float(1.0 - acc),
+                    "fnum": int(S.size),
+                    "fRatio": float(S.size / n_features),
+                    "red": float(_redundancy_rate_subset_fallback(S, zData_full)),
+                    "time_total": float(score_time + eval_time),
+                    "score_time": float(score_time),
+                    "eval_time": float(eval_time),
+                    "fset": " ".join(map(str, S.tolist())),
+                })
 
     else:
         # 2) WRAPPER methods => must be run per-k (expensive; recommended to disable for huge datasets)
@@ -774,7 +835,11 @@ def run_graph_job(args, run_dir: str, seed_run: int) -> None:
 
     zData_full = _mapminmax_zero_one(X_raw)
     n_features = Xtr.shape[1]
-    ratios = [float(x) for x in str(args.ratios).split(",") if str(x).strip()]
+    fixed_k = int(getattr(args, "fixed_fnum", 0))
+    if fixed_k > 0:
+        ratios = []
+    else:
+        ratios = [float(x) for x in str(args.ratios).split(",") if str(x).strip()]
 
     t0 = time.perf_counter()
     if method.lower() == "inffs":
@@ -788,9 +853,13 @@ def run_graph_job(args, run_dir: str, seed_run: int) -> None:
 
     ranking = np.asarray(ranking, dtype=int).ravel()
     fsets = []
-    for ratio in ratios:
-        k = max(1, min(int(round(ratio * n_features)), n_features))
+    if fixed_k > 0:
+        k = max(1, min(fixed_k, n_features))
         fsets.append(ranking[:k].astype(int))
+    else:
+        for ratio in ratios:
+            k = max(1, min(int(round(ratio * n_features)), n_features))
+            fsets.append(ranking[:k].astype(int))
 
     t_front = time.perf_counter()
     front_rows = _front_train_rows(
@@ -812,30 +881,50 @@ def run_graph_job(args, run_dir: str, seed_run: int) -> None:
         rr["front_eval_time"] = front_eval_time
 
     test_rows = []
-    for ratio in ratios:
-        k = max(1, min(int(round(ratio * n_features)), n_features))
+    if fixed_k > 0:
+        k = max(1, min(fixed_k, n_features))
         S = ranking[:k].astype(int)
-        t1 = time.perf_counter()
         acc = _knn_acc_test(Xtr, ytr, Xte, yte, S, knn_k=int(args.knn_eval_k))
-        eval_time = float(time.perf_counter() - t1)
-
         test_rows.append({
             "dataset_idx": int(args.dataset_idx),
             "dataset": str(datasetName),
             "method": method,
             "run": int(args.run),
-            "test_mode": "ratio",
-            "ratio": float(ratio),
+            "test_mode": "fixed_k",
+            "fixed_fnum": int(k),
             "acc_test": float(acc),
             "eRate_test": float(1.0 - acc),
             "fnum": int(S.size),
             "fRatio": float(S.size / n_features),
             "red": float(_redundancy_rate_subset_fallback(S, zData_full)),
-            "time_total": float(score_time + eval_time),
-            "score_time": float(score_time),
-            "eval_time": float(eval_time),
+            "time_total": float(score_time),
             "fset": " ".join(map(str, S.tolist())),
         })
+    else:
+        for ratio in ratios:
+            k = max(1, min(int(round(ratio * n_features)), n_features))
+            S = ranking[:k].astype(int)
+            t1 = time.perf_counter()
+            acc = _knn_acc_test(Xtr, ytr, Xte, yte, S, knn_k=int(args.knn_eval_k))
+            eval_time = float(time.perf_counter() - t1)
+
+            test_rows.append({
+                "dataset_idx": int(args.dataset_idx),
+                "dataset": str(datasetName),
+                "method": method,
+                "run": int(args.run),
+                "test_mode": "ratio",
+                "ratio": float(ratio),
+                "acc_test": float(acc),
+                "eRate_test": float(1.0 - acc),
+                "fnum": int(S.size),
+                "fRatio": float(S.size / n_features),
+                "red": float(_redundancy_rate_subset_fallback(S, zData_full)),
+                "time_total": float(score_time + eval_time),
+                "score_time": float(score_time),
+                "eval_time": float(eval_time),
+                "fset": " ".join(map(str, S.tolist())),
+            })
 
     _write_csv(os.path.join(run_dir, "front_train_cv.csv"), front_rows)
     _write_csv(os.path.join(run_dir, "test_points.csv"), test_rows)
@@ -996,7 +1085,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--ks_max_add", type=int, default=5)
     ap.add_argument("--ks_rc_tau", type=float, default=0.3)
 
-    # ratio grid for score-based methods
+    ap.add_argument("--fixed_fnum", type=str, default="0",
+                    help="Integer K, or True/auto to load target_fnum from ref_sizes.csv by (dataset_idx, run).")
+    ap.add_argument("--ref_sizes_csv", type=str, default=_default_ref_sizes_path(),
+                    help="CSV containing dataset_idx, run, target_fnum. Used when --fixed_fnum is True/auto.")
     ap.add_argument("--ratios", type=str, default="0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9")
 
     return ap.parse_args()
@@ -1006,6 +1098,35 @@ def main() -> None:
 
     dataset_idx = int(args.dataset_idx)
     run_id = int(args.run)
+
+    raw_ff = str(getattr(args, "fixed_fnum", "0")).strip().lower()
+    auto_mode = raw_ff in ("true", "t", "yes", "y", "auto", "1")
+
+    if auto_mode:
+        if args.algo.startswith("trad:") or args.algo.startswith("graph:"):
+            ref_path = str(getattr(args, "ref_sizes_csv", _default_ref_sizes_path())).strip()
+            if not ref_path or not os.path.exists(ref_path):
+                _write_text(os.path.join(str(args.out_root), "error_ref_sizes.txt"),
+                            f"ref_sizes_csv not found: {ref_path}\n")
+                raise SystemExit(2)
+
+            k = _auto_fixed_fnum_from_ref(dataset_idx=dataset_idx, run_id=run_id, ref_csv_path=ref_path)
+            if k is None:
+                algo_tag_tmp = _algo_tag(args.algo)
+                run_dir_tmp = os.path.join(str(args.out_root), f"dataset_{dataset_idx:02d}", algo_tag_tmp, f"run_{run_id:02d}")
+                _ensure_dir(run_dir_tmp)
+                _write_text(os.path.join(run_dir_tmp, "error.txt"),
+                            f"[AUTO fixed_fnum] Missing target_fnum for dataset_idx={dataset_idx}, run={run_id}\n")
+                print("SKIP (no target_fnum):", dataset_idx, run_id, args.algo)
+                return
+            args.fixed_fnum = int(k)
+        else:
+            args.fixed_fnum = 0
+    else:
+        try:
+            args.fixed_fnum = int(float(str(getattr(args, "fixed_fnum", "0")).strip()))
+        except Exception:
+            args.fixed_fnum = 0
 
     # deterministic seed per (dataset, run) independent of algo
     seed_run = 1000 * dataset_idx + run_id
@@ -1027,6 +1148,7 @@ def main() -> None:
         "cv_folds": int(args.cv_folds),
         "cv_seed": int(args.cv_seed),
         "knn_eval_k": int(args.knn_eval_k),
+        "fixed_fnum": int(args.fixed_fnum),
     })
 
     if args.algo == "all":
@@ -1073,4 +1195,4 @@ if __name__ == "__main__":
 #   --cv_folds 3 --cv_seed 42 `
 #   --knn_eval_k 5
 
-# python "$REPO\Compare\run_one_algo.py" --dataset_idx 2 --run 1 --algo "trad:FILTER_pearson" --out_root "$OUT" --baseline_root "$BASELINE" --oop_root "$OOP" --cv_folds 3 --knn_eval_k 5
+# python "$REPO\Compare\run_one_algo.py" --dataset_idx 2 --run 1 --algo "trad:FILTER_pearson" --out_root "$OUT" --baseline_root "$BASELINE" --oop_root "$OOP" --cv_folds 3 --knn_eval_k 5 --fixed_fnum True

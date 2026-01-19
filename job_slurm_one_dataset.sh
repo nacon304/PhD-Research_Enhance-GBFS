@@ -10,10 +10,12 @@
 set -euo pipefail
 
 homeDir='/nfs/scratch/<user>/GBFS-SND'
-OUT_ROOT='/nfs/scratch/<user>/gbfs_compare_results'
+OUT_ROOT='/nfs/scratch/<user>/gbfs_compare_results_v2'
 
 dataset_idx="$1"
 algo="$2"
+shift 2
+EXTRA_ARGS=("$@")
 
 RUN_ID="$SLURM_ARRAY_TASK_ID"
 SEED="$SLURM_ARRAY_TASK_ID"
@@ -37,4 +39,5 @@ python Compare/run_one_algo.py \
   --algo "$algo" \
   --out_root "$OUT_ROOT" \
   --baseline_root "$homeDir/Python Code" \
-  --oop_root "$homeDir/OOP Code"
+  --oop_root "$homeDir/OOP Code" \
+  "${EXTRA_ARGS[@]}"

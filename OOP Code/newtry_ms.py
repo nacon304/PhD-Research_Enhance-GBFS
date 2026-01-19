@@ -79,8 +79,8 @@ def newtry_ms(inputAdj, pop=20, times=40, run_dir=None):
     # 1) Chọn nghiệm "best" như cũ
     # -----------------------------
     alpha = 0.9
-    obj1 = obj_part[:, 0]          # f(1)  (tuỳ định nghĩa của bạn)
-    obj2 = obj_part[:, 1]          # f(2) = số feature (hoặc cái gì đó)
+    obj1 = obj_part[:, 0]          # f(1) = 1 - accuracy
+    obj2 = obj_part[:, 1]          # f(2) = number of features / feature count 
 
     fits = alpha * (1 - obj1) + (1 - alpha) * (1 - obj2)
     idx_best = np.argmax(fits)

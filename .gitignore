@@ -36,5 +36,14 @@ Evaluation/
 Original Result/
 Compare/Results/
 Compare/Results Debug/
+Compare/Results Debug 2/
 Compare/Results temp/
 _local_out/
+Compare/analyze_compare_results_v2.py
+Compare/analyze_compare_results_v3.py
+Compare/freidman_test.py
+Compare/gbfs_compare_results/
+Compare/get_size_enhance.py
+Compare/ref_rows.csv
+Compare/ref_sizes.csv
+Compare/run_algo_local.py

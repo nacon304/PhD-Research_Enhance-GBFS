@@ -84,4 +84,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# python .\Compare\merge_results.py --out_root "D:\PhD\The First Paper\Code Implement\GBFS-SND\_local_out"
+# python .\Compare\merge_results.py --out_root "D:\PhD\The First Paper\Code Implement\GBFS-SND\Compare\Results"

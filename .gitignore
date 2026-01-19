@@ -45,5 +45,4 @@ Compare/freidman_test.py
 Compare/gbfs_compare_results/
 Compare/get_size_enhance.py
 Compare/ref_rows.csv
-Compare/ref_sizes.csv
 Compare/run_algo_local.py

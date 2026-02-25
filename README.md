@@ -8,7 +8,7 @@ This repository contains the research implementation for **GBFS-Enh**, a graph-b
 - **Buddy-SFS** (post-run neighbor-based sequential refinement)
 
 <p align="center">  
-<img src="images/Enhance_GBFS_pipeline.svg" alt="GBFS-Enh pipeline overview" width="850"/>  
+<img src="images/Enhance_GBFS_pipeline.svg" alt="GBFS-Enh pipeline overview" width="75%"/>  
 </p>  
 <p align="center"><em>Overview of the GBFS-Enh evolutionary feature selection pipeline.</em></p>
 

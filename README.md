@@ -37,7 +37,6 @@ This repository accompanies the paper:
   year      = {2026},
   note      = {Submission / preprint; replace with final publication metadata}
 }
-
 ```
 
 ---
@@ -96,7 +95,6 @@ The implementation is designed for **research benchmarking**, not a generic end-
 ├── environment.yml                   # Conda environment
 ├── run_compare.sh                    # SLURM batch submission helper
 └── job_slurm_one_dataset.sh          # One-job-per-dataset/algorithm/run SLURM worker
-
 ```
 
 ---
@@ -108,7 +106,6 @@ The implementation is designed for **research benchmarking**, not a generic end-
 ```bash
 git clone https://github.com/nacon304/PhD-Research_Enhance-GBFS.git
 cd PhD-Research_Enhance-GBFS
-
 ```
 
 ### 2) Create the Conda environment
@@ -116,7 +113,6 @@ cd PhD-Research_Enhance-GBFS
 ```bash
 conda env create -f environment.yml
 conda activate gbfs_enhance
-
 ```
 
 ---
@@ -137,14 +133,12 @@ The loader resolves datasets from:
 
 ```text
 <repo_root>/Data
-
 ```
 
 Create the folder if it does not exist:
 
 ```bash
 mkdir -p Data
-
 ```
 
 ### Supported benchmark dataset indices (implemented)
@@ -183,7 +177,6 @@ python Compare/run_one_algo.py \
   --out_root "./results" \
   --baseline_root "./Python Code" \
   --oop_root "./OOP Code"
-
 ```
 
 ### Supported `--algo` formats
@@ -230,7 +223,6 @@ Each run writes outputs under:
 
 ```text
 <out_root>/dataset_<idx>/<algo_tag>/run_<run_id>/
-
 ```
 
 Typical files include:

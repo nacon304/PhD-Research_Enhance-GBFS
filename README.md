@@ -8,7 +8,7 @@ This repository contains the research implementation for **GBFS-Enh**, a graph-b
 - **Buddy-SFS** (post-run neighbor-based sequential refinement)
 
 <p align="center">  
-<img src="images/pipeline.pdf" alt="GBFS-Enh pipeline overview" width="850"/>  
+<img src="images/Enhance_GBFS_pipeline.svg" alt="GBFS-Enh pipeline overview" width="850"/>  
 </p>  
 <p align="center"><em>Overview of the GBFS-Enh evolutionary feature selection pipeline.</em></p>
 
@@ -241,13 +241,6 @@ Typical files include:
 - `test_points.csv` — test-set evaluations for selected subsets
 - `selected_features.txt` — selected subset (for methods that output a single final subset)
 - `error.txt` — error details (if a run fails)
-
-For enhanced GBFS runs, raw OOP artifacts are additionally stored under:
-
-```text
-.../gbfs_enhanced_raw/
-
-```
 
 ---
 
